@@ -19,6 +19,7 @@ Config Example:
     ssl_enabled = True needs port 6697(usually)
 
 IRCClient class:
+
               It represents the IRC client and manages the connection, message handling, channel management, and user interactions.
               The constructor initializes various attributes such as joined_channels, current_channel, channel_messages, decoder, encoder, irc_client_gui, message_queue, and user_list.
               The read_config method reads the configuration settings from a file.
@@ -34,6 +35,7 @@ IRCClient class:
               The start method is the main entry point of the IRC client. It establishes the connection, starts the message handling thread, keeps the client alive, and handles user inputs.
 
 IRCClientGUI class:
+
             It represents the graphical user interface for the IRC client using Tkinter.
             The constructor initializes the GUI window and sets up the message display area, input entry, and other components.
             The handle_input method handles user input from the input entry, performs actions based on the input, and updates the GUI.
