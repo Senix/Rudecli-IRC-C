@@ -1,0 +1,6 @@
+[IRC]
+server = irc.libera.chat
+port = 6697
+ssl_enabled = True
+nickname = Rudecli
+nickserv_password = password
