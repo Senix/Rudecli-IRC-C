@@ -60,18 +60,21 @@ import os
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
 from tkinter.constants import *
+from queue import Queue
 
 
 class IRCClient:
     def __init__(self):
         self.joined_channels = []
         self.current_channel = ''
-        self.channel_messages = {}  # Dictionary to store channel messages
-        self.decoder = irctokens.StatefulDecoder()  # Create a StatefulDecoder instance
-        self.encoder = irctokens.StatefulEncoder()  # Create a StatefulEncoder instance
-        self.irc_client_gui = None  # Initialize the IRCClientGUI instance
-        self.message_queue = []  # Message queue for storing messages
+        self.channel_messages = {}
+        self.decoder = irctokens.StatefulDecoder()
+        self.encoder = irctokens.StatefulEncoder()
+        self.irc_client_gui = None
+        self.message_queue = Queue()
         self.user_list = {}
+        self.receive_thread = None
+        self.stay_alive_thread = None
 
     def read_config(self, config_file):
         config = configparser.ConfigParser()
@@ -81,7 +84,7 @@ class IRCClient:
         self.port = config.getint('IRC', 'port')
         self.ssl_enabled = config.getboolean('IRC', 'ssl_enabled')
         self.nickname = config.get('IRC', 'nickname')
-        self.nickserv_password = config.get('IRC', 'nickserv_password')  # Read NickServ password from the config file
+        self.nickserv_password = config.get('IRC', 'nickserv_password')
 
     def connect(self):
         print(f'Connecting to server: {self.server}:{self.port}')
@@ -95,19 +98,16 @@ class IRCClient:
 
         self.irc.connect((self.server, self.port))
 
-        # Send necessary IRC commands to register the client with the server
         self.irc.send(bytes(f'NICK {self.nickname}\r\n', 'UTF-8'))
         self.irc.send(bytes(f'USER {self.nickname} 0 * :{self.nickname}\r\n', 'UTF-8'))
         time.sleep(5)
         print(f'Connected to server: {self.server}:{self.port}')
 
-        # Authenticate with NickServ using the stored password
         self.send_message(f'PRIVMSG NickServ :IDENTIFY {self.nickserv_password}')
 
     def send_message(self, message):
         if message == '/quit':
             self.irc.send(bytes(f'QUIT\r\n', 'UTF-8'))
-            sys.exit(0)
         else:
             self.irc.send(bytes(f'{message}\r\n', 'UTF-8'))
             self.log_message(self.current_channel, self.nickname, message, is_sent=True)
@@ -115,7 +115,7 @@ class IRCClient:
     def join_channel(self, channel):
         self.send_message(f'JOIN {channel}')
         self.joined_channels.append(channel)
-        self.channel_messages[channel] = []  # Initialize empty list for channel messages
+        self.channel_messages[channel] = []
         print(f'Joined channel: {channel}')
 
     def leave_channel(self, channel):
@@ -123,7 +123,7 @@ class IRCClient:
         if channel in self.joined_channels:
             self.joined_channels.remove(channel)
         if channel in self.channel_messages:
-            del self.channel_messages[channel]  # Remove channel messages
+            del self.channel_messages[channel]
         print(f'Left channel: {channel}')
         if self.current_channel == channel:
             self.current_channel = ''
@@ -144,50 +144,43 @@ class IRCClient:
             if not data:
                 break
 
-            received_messages = ""  # Variable to store multiple incoming messages
+            received_messages = ""
 
-            # Split the received data into individual messages
             messages = data.split('\r\n')
 
-            # Process each message
             for raw_message in messages:
-                # Tokenize the incoming message
                 try:
-                    if len(raw_message) == 0:  # ignore empty lines.
+                    if len(raw_message) == 0:
                         continue
                     tokens = irctokens.tokenise(raw_message)
                 except ValueError as e:
                     print(f"Error: {e}")
-                    continue  # Skip command-less lines
+                    continue
 
-                # Extract sender's nickname
                 if tokens.source is not None:
                     sender = tokens.hostmask.nickname
                 else:
                     sender = None
+                self.message_queue.put(raw_message)
 
-                # Handle specific commands
                 if tokens.command == "PING":
-                    # Respond with PONG (PNOG)
                     ping_param = tokens.params[0]
                     pong_response = f'PONG {ping_param}'
                     self.send_message(pong_response)
                     print(f'PING received: Response: PONG')
                 elif tokens.command == "353":
-                    # Update the user list with the received users
                     channel = tokens.params[2]
                     users = tokens.params[3].split()
                     if channel in self.user_list:
                         self.user_list[channel].extend(users)
                     else:
                         self.user_list[channel] = users
+                    self.irc_client_gui.update_user_list(channel)
                 elif tokens.command == "PRIVMSG":
                     target = tokens.params[0]
                     message_content = tokens.params[1]
 
-                    # Check if it's an ACTION message
                     if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
-                        # Remove the CTCP ACTION tags and extract the action content
                         action_content = message_content[8:-1]
                         action_message = f'* {sender} {action_content}'
                         if target not in self.channel_messages:
@@ -196,28 +189,25 @@ class IRCClient:
                         if target == self.current_channel:
                             received_messages += f'{action_message}\n'
                         else:
-                            self.notify_channel_activity(target)  # Notify user about activity
+                            self.notify_channel_activity(target)
                     else:
-                        # Regular PRIVMSG message
                         if target not in self.channel_messages:
                             self.channel_messages[target] = []
                         self.channel_messages[target].append((sender, message_content))
                         if target == self.current_channel:
                             received_messages += f'<{sender}> {message_content}\n'
                         else:
-                            self.notify_channel_activity(target)  # Notify user about activity
+                            self.notify_channel_activity(target)
 
-                    # Log the message
                     self.log_message(target, sender, message_content, is_sent=False)
 
                 else:
-                    # Server message
                     print(f': {raw_message}')
                     self.irc_client_gui.update_message_text(f'{raw_message}\r\n')
 
             if received_messages:
                 print(received_messages, end="", flush=True)
-                self.message_queue.append(received_messages)  # Append the received messages to the queue
+                self.message_queue.put(received_messages)
                 self.irc_client_gui.update_message_text(received_messages)
 
     def log_message(self, channel, sender, message, is_sent=False):
@@ -227,7 +217,7 @@ class IRCClient:
         else:
             log_line = f'[{timestamp}] <{sender}> {message}'
         directory = f'irc_log_{channel}'
-        os.makedirs(directory, exist_ok=True)  # Create directory if it doesn't exist
+        os.makedirs(directory, exist_ok=True)
         filename = f'{directory}/irc_log_{channel.replace("/", "_")}.txt'
         with open(filename, 'a') as file:
             file.write(log_line + '\n')
@@ -238,59 +228,18 @@ class IRCClient:
 
     def start(self):
         self.connect()
-        receive_thread = threading.Thread(target=self.handle_incoming_message)
-        receive_thread.start()
+        self.receive_thread = threading.Thread(target=self.handle_incoming_message)
+        self.receive_thread.start()
 
-        # keep alive thread
-        stay_alive = threading.Thread(target=self.keep_alive)
-        stay_alive.start()
+        self.stay_alive_thread = threading.Thread(target=self.keep_alive)
+        self.stay_alive_thread.start()
 
+        self.gui_handler()
+        self.receive_thread.join()
+
+    def gui_handler(self):
         while True:
-            try:
-                user_input = input(f'{self.current_channel}:<3 {self.nickname}: ')
-                if user_input.startswith('/join'):
-                    channel_name = user_input.split()[1]
-                    self.join_channel(channel_name)
-                elif user_input.startswith('/leave'):
-                    channel_name = user_input.split()[1]
-                    self.leave_channel(channel_name)
-                elif user_input.startswith('/ch'):
-                    print(f'{self.joined_channels}')
-                elif user_input.startswith('/sw'):
-                    channel_name = user_input.split()[1]
-                    self.current_channel = channel_name
-                    print(f'Switched to channel {self.current_channel}')
-                    self.display_channel_messages()
-                elif user_input.startswith('/messages'):
-                    self.display_channel_messages()
-                elif user_input.startswith('/quit'):
-                    self.send_message('QUIT')
-                    sys.exit(0)
-                elif user_input.startswith('/help'):
-                    print(f'/join to join a channel')
-                    print(f'/leave to leave a channel')
-                    print(f'/ch to list joined channels')
-                    print(f'/sw <channel> to switch to given channel')
-                    print(f'/messages to display any saved channel messages')
-                    print(f'/quit exits client')
-                elif self.current_channel:
-                    self.send_message(f'PRIVMSG {self.current_channel} :{user_input}')
-                    print(f'<{self.nickname}> {user_input}')
-                else:
-                    print('You are not in a channel. Use /join <channel> to join a channel.')
-
-            except KeyboardInterrupt:
-                self.send_message('QUIT')
-                sys.exit(0)
-
-    def display_channel_messages(self):
-        if self.current_channel in self.channel_messages:
-            messages = self.channel_messages[self.current_channel]
-            print(f'Messages in channel {self.current_channel}:')
-            for sender, message in messages:
-                print(f'<{sender}> {message}')
-        else:
-            print('No messages to display in the current channel.')
+            raw_message = self.message_queue.get()
 
 
 class IRCClientGUI:
@@ -299,30 +248,54 @@ class IRCClientGUI:
 
         self.root = tk.Tk()
         self.root.title("RudeCLI-IRC-C")
+        self.root.geometry("1000x600")
 
-        # Set the window size
-        self.root.geometry("800x600")
-
-        # Create and configure the text widget for displaying messages
         self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED)
-        self.message_text.pack(fill=tk.BOTH, expand=True)
+        self.message_text.grid(row=0, column=0, sticky="nsew")
 
-        # Create the input entry and bind the Enter key to send messages
+        self.user_list_frame = tk.Frame(self.root, width=150, height=400)
+        self.user_list_frame.grid(row=0, column=1, sticky="ns")
+
+        self.user_list_label = tk.Label(self.user_list_frame, text="User List:")
+        self.user_list_label.pack()
+
+        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20)
+        self.user_list_text.pack(fill=tk.BOTH, expand=True)
+
         self.input_frame = tk.Frame(self.root)
-        self.input_frame.pack(fill=tk.X)
+        self.input_frame.grid(row=1, column=0, sticky="ew")
 
         # Create the nickname/channel label
         self.nickname_label = tk.Label(self.input_frame, text=f" $ {self.irc_client.nickname} <3")
         self.nickname_label.pack(side=tk.LEFT)
 
-        # Create the input entry
         self.input_entry = tk.Entry(self.input_frame)
-        self.input_entry.pack(fill=tk.X, expand=True)
+        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.input_entry.bind("<Return>", self.handle_input)
 
-        # Start the IRC client
+        self.exit_button = tk.Button(self.input_frame, text="Exit", command=self.handle_exit)
+        self.exit_button.pack(side=tk.RIGHT)
+
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+
         threading.Thread(target=self.irc_client.start).start()
         self.irc_client.irc_client_gui = self
+
+    def update_user_list(self, channel):
+        if channel in self.irc_client.user_list:
+            users = self.irc_client.user_list[channel]
+            user_list_text = "\n".join(users)
+        else:
+            user_list_text = "No users in the channel."
+        self.user_list_text.config(state=tk.NORMAL)
+        self.user_list_text.delete(1.0, tk.END)
+        self.user_list_text.insert(tk.END, user_list_text)
+        self.user_list_text.config(state=tk.DISABLED)
+
+    def handle_exit(self):
+        self.irc_client.send_message('/quit')
+        self.root.quit()
 
     def handle_input(self, event):
         user_input = self.input_entry.get().strip()
@@ -330,21 +303,20 @@ class IRCClientGUI:
         if user_input:
             if user_input.startswith('/quit'):
                 self.irc_client.send_message('QUIT')
-                self.root.quit()
             elif user_input.startswith('/join'):
                 channel_name = user_input.split()[1]
                 self.irc_client.join_channel(channel_name)
             elif user_input.startswith('/leave'):
                 channel_name = user_input.split()[1]
                 self.irc_client.leave_channel(channel_name)
-                self.update_window_title(self.irc_client.nickname, '')  # Reset window title
+                self.update_window_title(self.irc_client.nickname, '')
             elif user_input.startswith('/ch'):
                 self.update_message_text(self.irc_client.joined_channels)
             elif user_input.startswith('/sw'):
                 channel_name = user_input.split()[1]
                 self.irc_client.current_channel = channel_name
                 self.display_channel_messages()
-                self.update_window_title(self.irc_client.nickname, channel_name)  # Update window title and nickname label
+                self.update_window_title(self.irc_client.nickname, channel_name)
             elif user_input.startswith('/help'):
                 self.update_message_text(f'/join to join a channel\r\n')
                 self.update_message_text(f'/leave to leave a channel\r\n')
@@ -371,14 +343,16 @@ class IRCClientGUI:
         else:
             self.root.title("RudeCLI-IRC-C")
 
-        #update the nickname label
         self.nickname_label.config(text=f"{channel_name} $ {nickname} <3")
 
     def update_message_text(self, text):
-        self.message_text.config(state=tk.NORMAL)
-        self.message_text.insert(tk.END, text)
-        self.message_text.config(state=tk.DISABLED)
-        self.message_text.see(tk.END)
+        def _update_message_text():
+            self.message_text.config(state=tk.NORMAL)
+            self.message_text.insert(tk.END, text)
+            self.message_text.config(state=tk.DISABLED)
+            self.message_text.see(tk.END)
+
+        self.root.after(0, _update_message_text)
 
     def display_channel_messages(self):
         channel = self.irc_client.current_channel
@@ -390,7 +364,6 @@ class IRCClientGUI:
             self.update_message_text(text)
         else:
             self.update_message_text('No messages to display in the current channel.')
-
 
     def notify_channel_activity(self, channel):
         messagebox.showinfo('Channel Activity', f'There is new activity in channel {channel}!\r')
