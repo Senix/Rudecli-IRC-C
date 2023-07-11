@@ -97,11 +97,13 @@ class IRCClient:
             self.irc = socket.socket(socket.AF_INET6 if ':' in self.server else socket.AF_INET)
 
         self.irc.connect((self.server, self.port))
+        self.irc_client_gui.update_message_text(f'Connecting to server: {self.server}:{self.port}')
 
         self.irc.send(bytes(f'NICK {self.nickname}\r\n', 'UTF-8'))
         self.irc.send(bytes(f'USER {self.nickname} 0 * :{self.nickname}\r\n', 'UTF-8'))
         time.sleep(5)
         print(f'Connected to server: {self.server}:{self.port}')
+        self.irc_client_gui.update_message_text(f'Connected to server: {self.server}:{self.port}')
 
         self.send_message(f'PRIVMSG NickServ :IDENTIFY {self.nickserv_password}')
 
@@ -203,11 +205,11 @@ class IRCClient:
                     self.log_message(target, sender, message_content, is_sent=False)
 
                 else:
-                    print(f': {raw_message}')
+                    #print(f': {raw_message}')
                     self.irc_client_gui.update_message_text(f'{raw_message}\r\n')
 
             if received_messages:
-                print(received_messages, end="", flush=True)
+                #print(received_messages, end="", flush=True)
                 self.message_queue.put(received_messages)
                 self.irc_client_gui.update_message_text(received_messages)
 
@@ -224,7 +226,7 @@ class IRCClient:
             file.write(log_line + '\n')
 
     def notify_channel_activity(self, channel):
-        print(f'Activity in channel {channel}!')
+        #print(f'Activity in channel {channel}!')
         self.irc_client_gui.update_message_text(f'Activity in channel {channel}!\r\n')
 
     def start(self):
@@ -322,6 +324,11 @@ class IRCClientGUI:
                 self.update_message_text(f'/sw <channel> to switch to given channel\r\n')
                 self.update_message_text(f'/messages to display any saved channel messages\r\n')
                 self.update_message_text(f'/quit exits client\r\n')
+            case "me":
+                action_content = user_input.split(' ', 1)[1]
+                action_message = f'\x01ACTION {action_content}\x01'
+                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{action_message}')
+                self.update_message_text(f'* {self.irc_client.nickname} {action_content}\r\n')
             case "users":
                 self.update_message_text(f'{self.irc_client.user_list}\r')
             case _:
@@ -357,9 +364,9 @@ class IRCClientGUI:
         if channel_name:
             title_parts.append(channel_name)
         if title_parts:
-            self.root.title("RudeCLI-IRC-C - " + " | ".join(title_parts))
+            self.root.title("RudeGUI-IRC-C - " + " | ".join(title_parts))
         else:
-            self.root.title("RudeCLI-IRC-C")
+            self.root.title("RudeGUI-IRC-C")
 
         self.nickname_label.config(text=f"{channel_name} $ {nickname} <3")
 
