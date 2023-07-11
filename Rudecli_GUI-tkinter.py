@@ -65,8 +65,8 @@ from queue import Queue
 
 class IRCClient:
     def __init__(self):
-        self.joined_channels = []
-        self.current_channel = ''
+        self.joined_channels: list = []
+        self.current_channel: str = ''
         self.channel_messages = {}
         self.decoder = irctokens.StatefulDecoder()
         self.encoder = irctokens.StatefulEncoder()
@@ -116,6 +116,7 @@ class IRCClient:
         self.send_message(f'JOIN {channel}')
         self.joined_channels.append(channel)
         self.channel_messages[channel] = []
+        self.user_list[channel] = []
         print(f'Joined channel: {channel}')
 
     def leave_channel(self, channel):
@@ -262,6 +263,12 @@ class IRCClientGUI:
         self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20)
         self.user_list_text.pack(fill=tk.BOTH, expand=True)
 
+        self.joined_channels_label = tk.Label(self.user_list_frame, text="Joined Channels:")
+        self.joined_channels_label.pack()
+
+        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20)
+        self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
+
         self.input_frame = tk.Frame(self.root)
         self.input_frame.grid(row=1, column=0, sticky="ew")
 
@@ -282,10 +289,49 @@ class IRCClientGUI:
         threading.Thread(target=self.irc_client.start).start()
         self.irc_client.irc_client_gui = self
 
+    def handle_input(self, event):
+        user_input = self.input_entry.get().strip()
+        if user_input[0] == "/":
+            self._command_parser(user_input, user_input[1:].split()[0])
+        else:
+            self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{user_input}')
+            self.update_message_text(f'<{self.irc_client.nickname}> {user_input}\r\n')
+        self.input_entry.delete(0, tk.END)
+
+    def _command_parser(self, user_input:str, command: str):
+        match command:
+            case "quit":
+                self.irc_client.send_message('QUIT')
+            case "join":
+                channel_name = user_input.split()[1]
+                self.irc_client.join_channel(channel_name)
+            case "leave":
+                channel_name = user_input.split()[1]
+                self.irc_client.leave_channel(channel_name)
+            case "ch":
+                self.update_message_text(self.irc_client.joined_channels)
+            case "sw":
+                channel_name = user_input.split()[1]
+                self.irc_client.current_channel = channel_name
+                self.display_channel_messages()
+                self.update_window_title(self.irc_client.nickname, channel_name)
+            case "help":
+                self.update_message_text(f'/join to join a channel\r\n')
+                self.update_message_text(f'/leave to leave a channel\r\n')
+                self.update_message_text(f'/ch to list joined channels\r\n')
+                self.update_message_text(f'/sw <channel> to switch to given channel\r\n')
+                self.update_message_text(f'/messages to display any saved channel messages\r\n')
+                self.update_message_text(f'/quit exits client\r\n')
+            case "users":
+                self.update_message_text(f'{self.irc_client.user_list}\r')
+            case _:
+                self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
+
     def update_user_list(self, channel):
-        if channel in self.irc_client.user_list:
-            users = self.irc_client.user_list[channel]
-            user_list_text = "\n".join(users)
+        if channel == self.irc_client.current_channel:
+            if channel in self.irc_client.user_list:
+                users = self.irc_client.user_list[channel]
+                user_list_text = "\n".join(users)
         else:
             user_list_text = "No users in the channel."
         self.user_list_text.config(state=tk.NORMAL)
@@ -293,44 +339,16 @@ class IRCClientGUI:
         self.user_list_text.insert(tk.END, user_list_text)
         self.user_list_text.config(state=tk.DISABLED)
 
+        joined_channels_text = "\n".join(self.irc_client.joined_channels)
+        self.joined_channels_text.config(state=tk.NORMAL)
+        self.joined_channels_text.delete(1.0, tk.END)
+        self.joined_channels_text.insert(tk.END, joined_channels_text)
+        self.joined_channels_text.config(state=tk.DISABLED)
+
+
     def handle_exit(self):
         self.irc_client.send_message('/quit')
         self.root.quit()
-
-    def handle_input(self, event):
-        user_input = self.input_entry.get().strip()
-
-        if user_input:
-            if user_input.startswith('/quit'):
-                self.irc_client.send_message('QUIT')
-            elif user_input.startswith('/join'):
-                channel_name = user_input.split()[1]
-                self.irc_client.join_channel(channel_name)
-            elif user_input.startswith('/leave'):
-                channel_name = user_input.split()[1]
-                self.irc_client.leave_channel(channel_name)
-                self.update_window_title(self.irc_client.nickname, '')
-            elif user_input.startswith('/ch'):
-                self.update_message_text(self.irc_client.joined_channels)
-            elif user_input.startswith('/sw'):
-                channel_name = user_input.split()[1]
-                self.irc_client.current_channel = channel_name
-                self.display_channel_messages()
-                self.update_window_title(self.irc_client.nickname, channel_name)
-            elif user_input.startswith('/help'):
-                self.update_message_text(f'/join to join a channel\r\n')
-                self.update_message_text(f'/leave to leave a channel\r\n')
-                self.update_message_text(f'/ch to list joined channels\r\n')
-                self.update_message_text(f'/sw <channel> to switch to given channel\r\n')
-                self.update_message_text(f'/messages to display any saved channel messages\r\n')
-                self.update_message_text(f'/quit exits client\r\n')
-            elif user_input.startswith('/users'):
-                self.update_message_text(f'{self.irc_client.user_list}\r')
-            else:
-                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{user_input}')
-                self.update_message_text(f'<{self.irc_client.nickname}> {user_input}\r\n')
-
-        self.input_entry.delete(0, tk.END)
 
     def update_window_title(self, nickname, channel_name):
         title_parts = []
@@ -365,14 +383,16 @@ class IRCClientGUI:
         else:
             self.update_message_text('No messages to display in the current channel.')
 
+        self.update_user_list(channel)
+
     def notify_channel_activity(self, channel):
         messagebox.showinfo('Channel Activity', f'There is new activity in channel {channel}!\r')
 
     def start(self):
         self.root.mainloop()
 
-
-if __name__ == '__main__':
+def main():
+    """The Main Function for the RudeGUI IRC Client."""
     config_file = 'conf.rude'
 
     irc_client = IRCClient()
@@ -380,3 +400,6 @@ if __name__ == '__main__':
 
     gui = IRCClientGUI(irc_client)
     gui.start()
+
+if __name__ == '__main__':
+    main()
