@@ -136,7 +136,7 @@ class IRCClient:
 
     def keep_alive(self):
         while True:
-            time.sleep(500)
+            time.sleep(195)
             param = self.server
             self.send_message(f'PING {param}')
             print(f'Sent Keep Alive: Ping')
@@ -150,6 +150,8 @@ class IRCClient:
             received_messages = ""
 
             messages = data.split('\r\n')
+
+            self.server_feedback_buffer = ""
 
             for raw_message in messages:
                 try:
@@ -171,6 +173,12 @@ class IRCClient:
                     pong_response = f'PONG {ping_param}'
                     self.send_message(pong_response)
                     print(f'PING received: Response: PONG')
+
+                elif tokens.command == "NOTICE" or tokens.command == "ERROR":
+                    # Process server feedback message
+                    self.server_feedback_buffer += raw_message + "\n"
+                    self.irc_client_gui.update_server_feedback_text(raw_message)
+
                 elif tokens.command == "353":
                     channel = tokens.params[2]
                     users = tokens.params[3].split()
@@ -193,6 +201,7 @@ class IRCClient:
                             received_messages += f'{action_message}\n'
                         else:
                             self.notify_channel_activity(target)
+                        self.log_message(target, sender, action_message, is_sent=False)
                     else:
                         if target not in self.channel_messages:
                             self.channel_messages[target] = []
@@ -205,8 +214,13 @@ class IRCClient:
                     self.log_message(target, sender, message_content, is_sent=False)
 
                 else:
-                    #print(f': {raw_message}')
-                    self.irc_client_gui.update_message_text(f'{raw_message}\r\n')
+                    if raw_message.startswith(':'):
+                        # Move message starting with ":" to server feedback
+                        self.server_feedback_buffer += raw_message + "\n"
+                        self.irc_client_gui.update_server_feedback_text(raw_message)
+                    else:
+                        # Print other messages in the main chat window
+                        self.irc_client_gui.update_message_text(raw_message)
 
             if received_messages:
                 #print(received_messages, end="", flush=True)
@@ -253,11 +267,14 @@ class IRCClientGUI:
         self.root.title("RudeCLI-IRC-C")
         self.root.geometry("1000x600")
 
-        self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED)
-        self.message_text.grid(row=0, column=0, sticky="nsew")
+        self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5)
+        self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
+
+        self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#00ff00")
+        self.message_text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
 
         self.user_list_frame = tk.Frame(self.root, width=150, height=400)
-        self.user_list_frame.grid(row=0, column=1, sticky="ns")
+        self.user_list_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=1, pady=1)
 
         self.user_list_label = tk.Label(self.user_list_frame, text="User List:")
         self.user_list_label.pack()
@@ -272,10 +289,9 @@ class IRCClientGUI:
         self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
 
         self.input_frame = tk.Frame(self.root)
-        self.input_frame.grid(row=1, column=0, sticky="ew")
+        self.input_frame.grid(row=2, column=0, sticky="ew", padx=1, pady=1)
 
-        # Create the nickname/channel label
-        self.nickname_label = tk.Label(self.input_frame, text=f" $ {self.irc_client.nickname} <3")
+        self.nickname_label = tk.Label(self.input_frame, text=f" $ {self.irc_client.nickname} ε⋗ ")
         self.nickname_label.pack(side=tk.LEFT)
 
         self.input_entry = tk.Entry(self.input_frame)
@@ -286,10 +302,25 @@ class IRCClientGUI:
         self.exit_button.pack(side=tk.RIGHT)
 
         self.root.grid_rowconfigure(0, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=3)
+        self.root.grid_columnconfigure(1, weight=1)
 
         threading.Thread(target=self.irc_client.start).start()
         self.irc_client.irc_client_gui = self
+
+        # Bind a callback function to the channel list text widget
+        self.joined_channels_text.bind("<Button-1>", self.switch_channel)
+
+    def switch_channel(self, event):
+        # Get the selected channel from the clicked position
+        index = self.joined_channels_text.index("@%d,%d" % (event.x, event.y))
+        line_num = int(index.split(".")[0])
+        channel = self.joined_channels_text.get(f"{line_num}.0", f"{line_num}.end").strip()
+
+        if channel in self.irc_client.joined_channels:
+            self.irc_client.current_channel = channel
+            self.display_channel_messages()
+            self.update_window_title(self.irc_client.nickname, channel)
 
     def handle_input(self, event):
         user_input = self.input_entry.get().strip()
@@ -307,7 +338,7 @@ class IRCClientGUI:
             case "join":
                 channel_name = user_input.split()[1]
                 self.irc_client.join_channel(channel_name)
-            case "leave":
+            case "part":
                 channel_name = user_input.split()[1]
                 self.irc_client.leave_channel(channel_name)
             case "ch":
@@ -319,9 +350,10 @@ class IRCClientGUI:
                 self.update_window_title(self.irc_client.nickname, channel_name)
             case "help":
                 self.update_message_text(f'/join to join a channel\r\n')
-                self.update_message_text(f'/leave to leave a channel\r\n')
+                self.update_message_text(f'/part to leave a channel\r\n')
                 self.update_message_text(f'/ch to list joined channels\r\n')
                 self.update_message_text(f'/sw <channel> to switch to given channel\r\n')
+                self.update_message_text(f'    -You can also click channels to switch\r\n')
                 self.update_message_text(f'/messages to display any saved channel messages\r\n')
                 self.update_message_text(f'/quit exits client\r\n')
             case "me":
@@ -334,13 +366,25 @@ class IRCClientGUI:
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
 
+    def update_server_feedback_text(self, message):
+        self.server_feedback_text.config(state=tk.NORMAL)
+        self.server_feedback_text.insert(tk.END, message + "\n", "server_feedback")
+        self.server_feedback_text.config(state=tk.DISABLED)
+        self.server_feedback_text.see(tk.END)
+
+        # Apply light blue text color to server feedback messages
+        self.server_feedback_text.tag_configure("server_feedback", foreground="#0099FF")
+
     def update_user_list(self, channel):
         if channel == self.irc_client.current_channel:
             if channel in self.irc_client.user_list:
                 users = self.irc_client.user_list[channel]
                 user_list_text = "\n".join(users)
+            else:
+                user_list_text = "No users in the channel."
         else:
             user_list_text = "No users in the channel."
+
         self.user_list_text.config(state=tk.NORMAL)
         self.user_list_text.delete(1.0, tk.END)
         self.user_list_text.insert(tk.END, user_list_text)
@@ -351,7 +395,6 @@ class IRCClientGUI:
         self.joined_channels_text.delete(1.0, tk.END)
         self.joined_channels_text.insert(tk.END, joined_channels_text)
         self.joined_channels_text.config(state=tk.DISABLED)
-
 
     def handle_exit(self):
         self.irc_client.send_message('/quit')
@@ -368,14 +411,23 @@ class IRCClientGUI:
         else:
             self.root.title("RudeGUI-IRC-C")
 
-        self.nickname_label.config(text=f"{channel_name} $ {nickname} <3")
+        self.nickname_label.config(text=f"{channel_name} $ {nickname} ε>")
 
     def update_message_text(self, text):
         def _update_message_text():
+            timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
             self.message_text.config(state=tk.NORMAL)
-            self.message_text.insert(tk.END, text)
+            lines = text.split('\n')
+            cleaned_lines = [line.rstrip('\r') for line in lines]  # Remove trailing '\r' characters
+            cleaned_text = '\n'.join(cleaned_lines)
+            timestamped_text = timestamp + cleaned_text  # Add timestamp to each line
+            self.message_text.insert(tk.END, timestamped_text)
             self.message_text.config(state=tk.DISABLED)
             self.message_text.see(tk.END)
+
+            # Apply green text color<3
+            self.message_text.tag_configure("brightgreen", foreground="#00ff00")
+            self.message_text.tag_add("brightgreen", "1.0", "end")
 
         self.root.after(0, _update_message_text)
 
