@@ -89,7 +89,7 @@ class IRCClient:
     def connect(self):
         print(f'Connecting to server: {self.server}:{self.port}')
 
-        if self.ssl_enabled:
+        if self.ssl_enabled: #ssl handling is here.
             context = ssl.create_default_context()
             self.irc = context.wrap_socket(socket.socket(socket.AF_INET6 if ':' in self.server else socket.AF_INET),
                                            server_hostname=self.server)
@@ -175,7 +175,7 @@ class IRCClient:
                     print(f'PING received: Response: PONG')
 
                 elif tokens.command == "NOTICE" or tokens.command == "ERROR":
-                    # Process server feedback message
+                    #process server feedback message
                     self.server_feedback_buffer += raw_message + "\n"
                     self.irc_client_gui.update_server_feedback_text(raw_message)
 
@@ -191,17 +191,49 @@ class IRCClient:
                     target = tokens.params[0]
                     message_content = tokens.params[1]
 
-                    if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
-                        action_content = message_content[8:-1]
-                        action_message = f'* {sender} {action_content}'
-                        if target not in self.channel_messages:
-                            self.channel_messages[target] = []
-                        self.channel_messages[target].append((sender, action_message))
-                        if target == self.current_channel:
-                            received_messages += f'{action_message}\n'
+                    if message_content.startswith("\x01") and message_content.endswith("\x01"):
+                        #CTCP request received
+                        ctcp_command = message_content[1:-1]
+
+                        if ctcp_command == "VERSION":
+                            #respond to VERSION request
+                            version_reply = "\x01VERSION RudeGUI-IRC-C v1.5\x01"
+                            self.send_message(f'PRIVMSG {sender} :{version_reply}')
+                        elif ctcp_command == "CTCP":
+                            #respond to CTCP request
+                            ctcp_response = "\x01CTCP response\x01"
+                            self.send_message(f'PRIVMSG {sender} :{ctcp_response}')
+                        elif ctcp_command == "TIME":
+                            #respond to TIME request
+                            time_reply = "\x01TIME " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\x01"
+                            self.send_message(f'PRIVMSG {sender} :{time_reply}')
+                        elif ctcp_command == "PING":
+                            #respond to PING request
+                            ping_reply = "\x01PING" + message_content[6:] + "\x01"
+                            self.send_message(f'PRIVMSG {sender} :{ping_reply}')
                         else:
-                            self.notify_channel_activity(target)
-                        self.log_message(target, sender, action_message, is_sent=False)
+                            if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
+                                action_content = message_content[8:-1]
+                                action_message = f'* {sender} {action_content}'
+                                if target not in self.channel_messages:
+                                    self.channel_messages[target] = []
+                                self.channel_messages[target].append((sender, action_message))
+                                if target == self.current_channel:
+                                    received_messages += f'{action_message}\n'
+                                else:
+                                    self.notify_channel_activity(target)
+                                self.log_message(target, sender, action_message, is_sent=False)
+                            else:
+                                if target not in self.channel_messages:
+                                    self.channel_messages[target] = []
+                                self.channel_messages[target].append((sender, message_content))
+                                if target == self.current_channel:
+                                    received_messages += f'<{sender}> {message_content}\n'
+                                else:
+                                    self.notify_channel_activity(target)
+
+                        self.log_message(target, sender, message_content, is_sent=False)
+
                     else:
                         if target not in self.channel_messages:
                             self.channel_messages[target] = []
@@ -211,15 +243,13 @@ class IRCClient:
                         else:
                             self.notify_channel_activity(target)
 
-                    self.log_message(target, sender, message_content, is_sent=False)
-
                 else:
                     if raw_message.startswith(':'):
-                        # Move message starting with ":" to server feedback
+                        #move message starting with ":" to server feedback
                         self.server_feedback_buffer += raw_message + "\n"
                         self.irc_client_gui.update_server_feedback_text(raw_message)
                     else:
-                        # Print other messages in the main chat window
+                        #print other messages in the main chat window
                         self.irc_client_gui.update_message_text(raw_message)
 
             if received_messages:
@@ -273,19 +303,19 @@ class IRCClientGUI:
         self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#00ff00")
         self.message_text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
 
-        self.user_list_frame = tk.Frame(self.root, width=150, height=400)
+        self.user_list_frame = tk.Frame(self.root, width=150, height=400, bg="black")
         self.user_list_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=1, pady=1)
 
-        self.user_list_label = tk.Label(self.user_list_frame, text="User List:")
+        self.user_list_label = tk.Label(self.user_list_frame, text="User List:", bg="black", fg="#FFA500")
         self.user_list_label.pack()
 
-        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20)
+        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20, bg="black", fg="#FFA500")
         self.user_list_text.pack(fill=tk.BOTH, expand=True)
 
-        self.joined_channels_label = tk.Label(self.user_list_frame, text="Joined Channels:")
+        self.joined_channels_label = tk.Label(self.user_list_frame, text="Channels:", bg="black", fg="#00bfff")
         self.joined_channels_label.pack()
 
-        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20)
+        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20, bg="black", fg="#00bfff")
         self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
 
         self.input_frame = tk.Frame(self.root)
@@ -308,11 +338,11 @@ class IRCClientGUI:
         threading.Thread(target=self.irc_client.start).start()
         self.irc_client.irc_client_gui = self
 
-        # Bind a callback function to the channel list text widget
+        #bind a callback function to the channel list text widget
         self.joined_channels_text.bind("<Button-1>", self.switch_channel)
 
     def switch_channel(self, event):
-        # Get the selected channel from the clicked position
+        #get the selected channel from the clicked position
         index = self.joined_channels_text.index("@%d,%d" % (event.x, event.y))
         line_num = int(index.split(".")[0])
         channel = self.joined_channels_text.get(f"{line_num}.0", f"{line_num}.end").strip()
@@ -372,8 +402,8 @@ class IRCClientGUI:
         self.server_feedback_text.config(state=tk.DISABLED)
         self.server_feedback_text.see(tk.END)
 
-        # Apply light blue text color to server feedback messages
-        self.server_feedback_text.tag_configure("server_feedback", foreground="#0099FF")
+        #apply light blue text color to server feedback messages
+        self.server_feedback_text.tag_configure("server_feedback", foreground="#0099FF") #make the server output blue because it's nice on the eyes.
 
     def update_user_list(self, channel):
         if channel == self.irc_client.current_channel:
@@ -418,14 +448,14 @@ class IRCClientGUI:
             timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
             self.message_text.config(state=tk.NORMAL)
             lines = text.split('\n')
-            cleaned_lines = [line.rstrip('\r') for line in lines]  # Remove trailing '\r' characters
+            cleaned_lines = [line.rstrip('\r') for line in lines]  #remove trailing '\r' characters
             cleaned_text = '\n'.join(cleaned_lines)
-            timestamped_text = timestamp + cleaned_text  # Add timestamp to each line
+            timestamped_text = timestamp + cleaned_text  #add timestamp to each line
             self.message_text.insert(tk.END, timestamped_text)
             self.message_text.config(state=tk.DISABLED)
             self.message_text.see(tk.END)
 
-            # Apply green text color<3
+            #apply green text color<3
             self.message_text.tag_configure("brightgreen", foreground="#00ff00")
             self.message_text.tag_add("brightgreen", "1.0", "end")
 
