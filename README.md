@@ -5,13 +5,13 @@ RudeCli-IRC-C: Rudimentary Command Line Interface IRC Client.
 RudeCli assumes config.rude is available and configed properly:
 
 Config Example:
-        [IRC]
-        server = irc.libera.chat
-        port = 6697
-        ssl_enabled = True
-        nickname = Rudecli
-        nickserv_password = password
-        auto_join_channels = #channel1,#channel2,#channel3
+                        [IRC]
+                        server = irc.libera.chat
+                        port = 6697
+                        ssl_enabled = True
+                        nickname = Rudecli
+                        nickserv_password = password
+                        auto_join_channels = #channel1,#channel2,#channel3
 
     password can be replaced with your nicks password to auto-auth with nickserv.
     to use ssl or not you can designate by port: no ssl: 6667 yes ssl: 6697
