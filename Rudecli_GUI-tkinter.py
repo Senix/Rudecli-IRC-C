@@ -10,11 +10,13 @@ port = 6697
 ssl_enabled = True
 nickname = Rudecli
 nickserv_password = password
+auto_join_channels = #channel1,#channel2,#channel3
 
 password can be replaced with your nicks password to auto-auth with nickserv.
 to use ssl or not you can designate by port: no ssl: 6667 yes ssl: 6697
 ssl_enabled = False needs port 6667
 ssl_enabled = True needs port 6697(usually)
+Auto-Join is now available.
 
 IRCClient class:
         It represents the IRC client and manages the connection, message handling, channel management, and user interactions.
@@ -65,6 +67,7 @@ from queue import Queue
 
 class IRCClient:
     def __init__(self):
+        self.exit_event = threading.Event()
         self.joined_channels: list = []
         self.current_channel: str = ''
         self.channel_messages = {}
@@ -85,6 +88,7 @@ class IRCClient:
         self.ssl_enabled = config.getboolean('IRC', 'ssl_enabled')
         self.nickname = config.get('IRC', 'nickname')
         self.nickserv_password = config.get('IRC', 'nickserv_password')
+        self.auto_join_channels = config.get('IRC', 'auto_join_channels').split(',')
 
     def connect(self):
         print(f'Connecting to server: {self.server}:{self.port}')
@@ -97,15 +101,18 @@ class IRCClient:
             self.irc = socket.socket(socket.AF_INET6 if ':' in self.server else socket.AF_INET)
 
         self.irc.connect((self.server, self.port))
-        self.irc_client_gui.update_message_text(f'Connecting to server: {self.server}:{self.port}')
+        self.irc_client_gui.update_message_text(f'Connecting to server: {self.server}:{self.port}\n')
 
         self.irc.send(bytes(f'NICK {self.nickname}\r\n', 'UTF-8'))
         self.irc.send(bytes(f'USER {self.nickname} 0 * :{self.nickname}\r\n', 'UTF-8'))
         time.sleep(5)
         print(f'Connected to server: {self.server}:{self.port}')
-        self.irc_client_gui.update_message_text(f'Connected to server: {self.server}:{self.port}')
+        self.irc_client_gui.update_message_text(f'Connected to server: {self.server}:{self.port}\n')
 
         self.send_message(f'PRIVMSG NickServ :IDENTIFY {self.nickserv_password}')
+
+        for channel in self.auto_join_channels:
+            self.join_channel(channel)
 
     def send_message(self, message):
         if message == '/quit':
@@ -142,7 +149,7 @@ class IRCClient:
             print(f'Sent Keep Alive: Ping')
 
     def handle_incoming_message(self):
-        while True:
+        while not self.exit_event.is_set():
             data = self.irc.recv(4096).decode('UTF-8', errors='ignore')
             if not data:
                 break
@@ -197,7 +204,7 @@ class IRCClient:
 
                         if ctcp_command == "VERSION":
                             #respond to VERSION request
-                            version_reply = "\x01VERSION RudeGUI-IRC-C v1.5\x01"
+                            version_reply = "\x01VERSION RudeGUI-IRC-C v1.4\x01"
                             self.send_message(f'PRIVMSG {sender} :{version_reply}')
                         elif ctcp_command == "CTCP":
                             #respond to CTCP request
@@ -271,7 +278,8 @@ class IRCClient:
 
     def notify_channel_activity(self, channel):
         #print(f'Activity in channel {channel}!')
-        self.irc_client_gui.update_message_text(f'Activity in channel {channel}!\r\n')
+        #self.irc_client_gui.update_message_text(f'Activity in channel {channel}!\r\n')
+        self.irc_client_gui.update_server_feedback_text(f'Activity in channel {channel}!\r')
 
     def start(self):
         self.connect()
@@ -282,7 +290,7 @@ class IRCClient:
         self.stay_alive_thread.start()
 
         self.gui_handler()
-        self.receive_thread.join()
+        self.exit_event.set()
 
     def gui_handler(self):
         while True:
@@ -292,6 +300,7 @@ class IRCClient:
 class IRCClientGUI:
     def __init__(self, irc_client):
         self.irc_client = irc_client
+        self.exit_event = irc_client.exit_event
 
         self.root = tk.Tk()
         self.root.title("RudeCLI-IRC-C")
@@ -321,7 +330,7 @@ class IRCClientGUI:
         self.input_frame = tk.Frame(self.root)
         self.input_frame.grid(row=2, column=0, sticky="ew", padx=1, pady=1)
 
-        self.nickname_label = tk.Label(self.input_frame, text=f" $ {self.irc_client.nickname} ε⋗ ")
+        self.nickname_label = tk.Label(self.input_frame, text=f" $ {self.irc_client.nickname} #> ")
         self.nickname_label.pack(side=tk.LEFT)
 
         self.input_entry = tk.Entry(self.input_frame)
@@ -427,8 +436,9 @@ class IRCClientGUI:
         self.joined_channels_text.config(state=tk.DISABLED)
 
     def handle_exit(self):
-        self.irc_client.send_message('/quit')
-        self.root.quit()
+        self.irc_client.exit_event.set()  
+        self.irc_client.irc.shutdown(socket.SHUT_RDWR)
+        self.root.destroy()
 
     def update_window_title(self, nickname, channel_name):
         title_parts = []
@@ -441,7 +451,7 @@ class IRCClientGUI:
         else:
             self.root.title("RudeGUI-IRC-C")
 
-        self.nickname_label.config(text=f"{channel_name} $ {nickname} ε>")
+        self.nickname_label.config(text=f"{channel_name} $ {nickname} $> ")
 
     def update_message_text(self, text):
         def _update_message_text():
@@ -479,6 +489,13 @@ class IRCClientGUI:
 
     def start(self):
         self.root.mainloop()
+        while not self.exit_event.is_set():
+            self.root.update()
+            if self.exit_event.is_set():
+                break
+            time.sleep(0.1)
+        self.irc_client.receive_thread.join()
+        self.root.quit()
 
 def main():
     """The Main Function for the RudeGUI IRC Client."""
