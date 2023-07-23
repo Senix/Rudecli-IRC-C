@@ -178,6 +178,7 @@ class IRCClient:
             messages = data.split('\r\n')
 
             self.server_feedback_buffer = ""
+            self.whois_data = {}
 
             for raw_message in messages:
                 try:
@@ -211,6 +212,46 @@ class IRCClient:
 
                     self.user_list[channel] = users
                     self.irc_client_gui.update_user_list(channel)
+
+                elif tokens.command == "311":
+                    # Handle WHOIS reply for user info
+                    nickname = tokens.params[1]
+                    username = tokens.params[2]
+                    hostname = tokens.params[3]
+                    realname = tokens.params[5]
+                    self.whois_data[nickname] = {"Username": username, "Hostname": hostname, "Realname": realname}
+
+                elif tokens.command == "312":
+                    # Handle WHOIS reply for server info
+                    nickname = tokens.params[1]
+                    server_info = tokens.params[2]
+                    if self.whois_data.get(nickname):
+                        self.whois_data[nickname]["Server"] = server_info
+
+                elif tokens.command == "313":
+                    # Handle WHOIS reply for operator info
+                    nickname = tokens.params[1]
+                    operator_info = tokens.params[2]
+                    if self.whois_data.get(nickname):
+                        self.whois_data[nickname]["Operator"] = operator_info
+
+                elif tokens.command == "317":
+                    # Handle WHOIS reply for idle time
+                    nickname = tokens.params[1]
+                    idle_time_seconds = int(tokens.params[2])
+                    idle_time = str(datetime.timedelta(seconds=idle_time_seconds))
+                    if self.whois_data.get(nickname):
+                        self.whois_data[nickname]["Idle Time"] = idle_time
+
+                elif tokens.command == "318":
+                    # End of WHOIS reply
+                    nickname = tokens.params[1]
+                    if self.whois_data.get(nickname):
+                        whois_response = f"WHOIS for {nickname}:\n"
+                        for key, value in self.whois_data[nickname].items():
+                            whois_response += f"{key}: {value}\n"
+                        whois_response += "\n"
+                        self.irc_client_gui.update_message_text(whois_response)
 
                 elif tokens.command == "PART":
                     # Handle PART message to remove the user from the user list
@@ -247,6 +288,19 @@ class IRCClient:
                         for channel in self.user_list:
                             if quit_user in self.user_list[channel]:
                                 self.user_list[channel].remove(quit_user)
+                                self.irc_client_gui.update_user_list(channel)
+                    self.server_feedback_buffer += raw_message + "\n"
+                    self.irc_client_gui.update_server_feedback_text(raw_message)
+
+                elif tokens.command == "NICK":
+                    # Handle NICK message to update the user's nickname in the user list
+                    if tokens.source is not None:
+                        old_nickname = tokens.hostmask.nickname
+                        new_nickname = tokens.params[0]
+                        for channel in self.user_list:
+                            if old_nickname in self.user_list[channel]:
+                                self.user_list[channel].remove(old_nickname)
+                                self.user_list[channel].append(new_nickname)
                                 self.irc_client_gui.update_user_list(channel)
                     self.server_feedback_buffer += raw_message + "\n"
                     self.irc_client_gui.update_server_feedback_text(raw_message)
@@ -338,6 +392,9 @@ class IRCClient:
         #self.irc_client_gui.update_message_text(f'Activity in channel {channel}!\r\n')
         self.irc_client_gui.update_server_feedback_text(f'Activity in channel {channel}!\r')
 
+    def whois(self, target):
+        self.send_message(f'WHOIS {target}')
+
     def start(self):
         self.connect()
         self.receive_thread = threading.Thread(target=self.handle_incoming_message)
@@ -363,6 +420,7 @@ class IRCClientGUI:
         self.root.title("RudeCLI-IRC-C")
         self.root.geometry("1000x600")
         #self.root.iconbitmap("favicon.ico")
+        self.selected_channel = None
 
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5)
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
@@ -370,19 +428,19 @@ class IRCClientGUI:
         self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ffffff")
         self.message_text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
 
-        self.user_list_frame = tk.Frame(self.root, width=150, height=400, bg="black")
+        self.user_list_frame = tk.Frame(self.root, width=100, height=400, bg="black")
         self.user_list_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=1, pady=1)
 
         self.user_list_label = tk.Label(self.user_list_frame, text="User List:", bg="black", fg="#c1b1e5")
         self.user_list_label.pack()
 
-        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20, bg="black", fg="#c1b1e5", cursor="arrow")
+        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#c1b1e5", cursor="arrow")
         self.user_list_text.pack(fill=tk.BOTH, expand=True)
 
         self.joined_channels_label = tk.Label(self.user_list_frame, text="Channels:", bg="black", fg="#00bfff")
         self.joined_channels_label.pack()
 
-        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20, bg="black", fg="#00bfff", cursor="arrow")
+        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#00bfff", cursor="arrow")
         self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
 
         self.input_frame = tk.Frame(self.root)
@@ -420,6 +478,12 @@ class IRCClientGUI:
             self.irc_client.current_channel = channel
             self.display_channel_messages()
             self.update_window_title(self.irc_client.nickname, channel)
+
+            # Highlight the selected channel
+            if self.selected_channel:
+                self.joined_channels_text.tag_remove("selected", 1.0, tk.END)
+            self.joined_channels_text.tag_add("selected", f"{line_num}.0", f"{line_num}.end")
+            self.selected_channel = channel
 
     def handle_input(self, event):
         user_input = self.input_entry.get().strip()
@@ -478,6 +542,9 @@ class IRCClientGUI:
                     self.update_message_text(f'<{self.irc_client.nickname} -> {receiver}> {message_content}\r\n')
                 else:
                     self.update_message_text(f"Invalid usage. Usage: /msg <nickname> <message_content>\r\n")
+            case "whois":
+                target = user_input.split()[1]
+                self.irc_client.whois(target)
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
 
@@ -505,6 +572,14 @@ class IRCClientGUI:
         self.user_list_text.delete(1.0, tk.END)
         self.user_list_text.insert(tk.END, user_list_text)
         self.user_list_text.config(state=tk.DISABLED)
+
+        # Remove the "selected" tag from the entire text widget
+        self.user_list_text.tag_remove("selected", "1.0", tk.END)
+
+        # Apply the "selected" tag only to the specific channel entry
+        if self.irc_client.current_channel == channel:
+            self.user_list_text.tag_add("selected", "1.0", "1.end")
+            self.update_window_title(self.irc_client.nickname, channel)
 
         joined_channels_text = "\n".join(self.irc_client.joined_channels)
         self.joined_channels_text.config(state=tk.NORMAL)
@@ -615,6 +690,8 @@ class IRCClientGUI:
         self.input_menu.add_command(label="Select All", command=self.select_all_text)
 
         self.input_entry.bind("<Button-3>", self.show_input_menu)
+        self.joined_channels_text.tag_configure("selected", background="#cc0000")
+        #self.user_list_text.tag_configure("selected", background="#444444")
 
     def show_input_menu(self, event):
         try:
