@@ -59,7 +59,7 @@ import irctokens
 import re
 import os
 import tkinter as tk
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext, Menu
 from tkinter.constants import *
 from queue import Queue
 
@@ -129,6 +129,12 @@ class IRCClient:
                 self.channel_messages.setdefault(target_channel, []).append((self.nickname, message))
 
             self.log_message(self.current_channel, self.nickname, message, is_sent=True)
+
+    def change_nickname(self, new_nickname):
+        self.send_message(f'NICK {new_nickname}')
+        self.nickname = new_nickname
+        print(f'Nickname changed to: {new_nickname}')
+        self.irc_client_gui.update_message_text(f'Nickname changed to: {new_nickname}\n')
 
     def join_channel(self, channel):
         self.send_message(f'JOIN {channel}')
@@ -361,22 +367,22 @@ class IRCClientGUI:
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5)
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
 
-        self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#00ff00")
+        self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ffffff")
         self.message_text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
 
         self.user_list_frame = tk.Frame(self.root, width=150, height=400, bg="black")
         self.user_list_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=1, pady=1)
 
-        self.user_list_label = tk.Label(self.user_list_frame, text="User List:", bg="black", fg="#FFA500")
+        self.user_list_label = tk.Label(self.user_list_frame, text="User List:", bg="black", fg="#c1b1e5")
         self.user_list_label.pack()
 
-        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20, bg="black", fg="#FFA500")
+        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20, bg="black", fg="#c1b1e5", cursor="arrow")
         self.user_list_text.pack(fill=tk.BOTH, expand=True)
 
         self.joined_channels_label = tk.Label(self.user_list_frame, text="Channels:", bg="black", fg="#00bfff")
         self.joined_channels_label.pack()
 
-        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20, bg="black", fg="#00bfff")
+        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=20, height=20, bg="black", fg="#00bfff", cursor="arrow")
         self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
 
         self.input_frame = tk.Frame(self.root)
@@ -402,6 +408,7 @@ class IRCClientGUI:
 
         #bind a callback function to the channel list text widget
         self.joined_channels_text.bind("<Button-1>", self.switch_channel)
+        self.init_input_menu()
 
     def switch_channel(self, event):
         #get the selected channel from the clicked position
@@ -447,7 +454,11 @@ class IRCClientGUI:
                 self.update_message_text(f'/sw <channel> to switch to given channel\r\n')
                 self.update_message_text(f'    -You can also click channels to switch\r\n')
                 self.update_message_text(f'/messages to display any saved channel messages\r\n')
-                self.update_message_text(f'/quit exits client\r\n')
+                self.update_message_text(f'Tab to complete nick names\r\n')
+                self.update_message_text(f'/msg to send a direct message\r\n')
+                self.update_message_text(f'    -Example: /msg NickServ IDENTIFY\r\n')
+                self.update_message_text(f'/quit closes connection with network\r\n')
+                self.update_message_text(f'Exit button will also send /quit and close client\r\n')
             case "me":
                 action_content = user_input.split(' ', 1)[1]
                 action_message = f'\x01ACTION {action_content}\x01'
@@ -455,6 +466,18 @@ class IRCClientGUI:
                 self.update_message_text(f'* {self.irc_client.nickname} {action_content}\r\n')
             case "users":
                 self.irc_client.sync_user_list()
+            case "nick":
+                new_nickname = user_input.split()[1]
+                self.irc_client.change_nickname(new_nickname)
+            case "msg":
+                parts = user_input.split(' ', 2)
+                if len(parts) >= 3:
+                    receiver = parts[1]
+                    message_content = parts[2]
+                    self.irc_client.send_message(f'PRIVMSG {receiver} :{message_content}')
+                    self.update_message_text(f'<{self.irc_client.nickname} -> {receiver}> {message_content}\r\n')
+                else:
+                    self.update_message_text(f"Invalid usage. Usage: /msg <nickname> <message_content>\r\n")
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
 
@@ -465,7 +488,7 @@ class IRCClientGUI:
         self.server_feedback_text.see(tk.END)
 
         #apply light blue text color to server feedback messages
-        self.server_feedback_text.tag_configure("server_feedback", foreground="#0099FF") #make the server output blue because it's nice on the eyes.
+        self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff") #make the server output blue because it's nice on the eyes.
 
     def update_user_list(self, channel):
         if channel in self.irc_client.user_list:
@@ -563,7 +586,7 @@ class IRCClientGUI:
             self.message_text.see(tk.END)
 
             #apply green text color<3
-            self.message_text.tag_configure("brightgreen", foreground="#00ff00")
+            self.message_text.tag_configure("brightgreen", foreground="#C0FFEE")
             self.message_text.tag_add("brightgreen", "1.0", "end")
 
         self.root.after(0, _update_message_text)
@@ -583,6 +606,34 @@ class IRCClientGUI:
             self.update_message_text('No messages to display in the current channel.')
 
         self.update_user_list(channel)
+
+    def init_input_menu(self):
+        self.input_menu = Menu(self.input_entry, tearoff=0)
+        self.input_menu.add_command(label="Cut", command=self.cut_text)
+        self.input_menu.add_command(label="Copy", command=self.copy_text)
+        self.input_menu.add_command(label="Paste", command=self.paste_text)
+        self.input_menu.add_command(label="Select All", command=self.select_all_text)
+
+        self.input_entry.bind("<Button-3>", self.show_input_menu)
+
+    def show_input_menu(self, event):
+        try:
+            self.input_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.input_menu.grab_release()
+
+    def cut_text(self):
+        self.input_entry.event_generate("<<Cut>>")
+
+    def copy_text(self):
+        self.input_entry.event_generate("<<Copy>>")
+
+    def paste_text(self):
+        self.input_entry.event_generate("<<Paste>>")
+
+    def select_all_text(self):
+        self.input_entry.select_range(0, tk.END)
+        self.input_entry.icursor(tk.END)
 
     def notify_channel_activity(self, channel):
         messagebox.showinfo('Channel Activity', f'There is new activity in channel {channel}!\r')
