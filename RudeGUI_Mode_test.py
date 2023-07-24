@@ -261,36 +261,11 @@ class IRCClient:
                     self.irc_client_gui.update_server_feedback_text(raw_message)
 
                 elif tokens.command == "MODE":
-                    # Handle MODE message to update user modes in the user list
                     channel = tokens.params[0]
-                    modes = tokens.params[1:]
-
-                    if channel in self.user_list:
-                        for mode in modes:
-                            if len(mode) == 2:
-                                change, target = mode
-                                if change == "+":
-                                    # User is getting a mode, update the user mode in the user list
-                                    if target.startswith("@") or target.startswith("+"):
-                                        target = target[1:]
-                                    if target not in self.user_list[channel]:
-                                        self.user_list[channel].append("@" + target)
-                                elif change == "-":
-                                    # User is losing a mode, remove the mode from the user in the user list
-                                    if target.startswith("@") or target.startswith("+"):
-                                        target = target[1:]
-                                    if "@" + target in self.user_list[channel]:
-                                        self.user_list[channel].remove("@" + target)
-                                        if target in self.user_list[channel]:
-                                            self.user_list[channel].remove(target)  # Remove the user without "@"
-                                else:
-                                    # Handle other modes here if needed
-                                    pass
-
-                        self.irc_client_gui.update_user_list(channel)  # Update user list in GUI
-
-                    self.server_feedback_buffer += raw_message + "\n"
-                    self.irc_client_gui.update_server_feedback_text(raw_message)
+                    mode = tokens.params[1]
+                    if len(tokens.params) > 2:  # Ensure there's a target user for the mode change
+                        target_user = tokens.params[2]
+                        self.handle_mode_changes(channel, mode, target_user)
 
                 elif tokens.command == "PRIVMSG":
                     target = tokens.params[0]
@@ -362,6 +337,36 @@ class IRCClient:
                 self.message_queue.put(received_messages)
                 self.irc_client_gui.update_message_text(received_messages)
 
+    def handle_mode_changes(self, channel, mode, user):
+        if mode == "+o":
+            # If user already has voice (+v), upgrade to operator
+            if "+" + user in self.user_list[channel]:
+                self.user_list[channel].remove("+" + user)
+                self.user_list[channel].append("@" + user)
+            # Else if user is already in list without voice, just add operator status
+            elif user in self.user_list[channel]:
+                self.user_list[channel].remove(user)
+                self.user_list[channel].append("@" + user)
+        elif mode == "-o":
+            # Downgrade operator to voice if they have voice, otherwise just remove operator status
+            if "@" + user in self.user_list[channel]:
+                self.user_list[channel].remove("@" + user)
+                if "+" + user in self.user_list[channel]:
+                    self.user_list[channel].append("+" + user)
+                else:
+                    self.user_list[channel].append(user)
+        elif mode == "+v":
+            # Give voice mode only if they are not an operator
+            if user in self.user_list[channel] and "@" + user not in self.user_list[channel]:
+                self.user_list[channel].remove(user)
+                self.user_list[channel].append("+" + user)
+        elif mode == "-v":
+            # Take voice mode
+            if "+" + user in self.user_list[channel]:
+                self.user_list[channel].remove("+" + user)
+                self.user_list[channel].append(user)
+        self.irc_client_gui.update_user_list(channel)
+        
     def log_message(self, channel, sender, message, is_sent=False):
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         if is_sent:
