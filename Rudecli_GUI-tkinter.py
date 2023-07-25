@@ -77,6 +77,7 @@ class IRCClient:
         self.user_list = {}
         self.receive_thread = None
         self.stay_alive_thread = None
+        self.user_dual_privileges = {}
 
     def read_config(self, config_file):
         config = configparser.ConfigParser()
@@ -254,13 +255,15 @@ class IRCClient:
                         self.irc_client_gui.update_message_text(whois_response)
 
                 elif tokens.command == "PART":
-                    # Handle PART message to remove the user from the user list
+                    # Handle PART message to remove the user from the user list, including similar users with @ and +
                     if tokens.source is not None:
                         quit_user = tokens.hostmask.nickname
-                        quit_message = tokens.params[0]
+                        quit_user = self.strip_nick_prefix(quit_user)
                         channel = tokens.params[0]
-                        if channel in self.user_list and quit_user in self.user_list[channel]:
-                            self.user_list[channel].remove(quit_user)
+                        if channel in self.user_list:
+                            similar_users = [user for user in self.user_list[channel] if user == quit_user or user.startswith('@' + quit_user) or user.startswith('+' + quit_user)]
+                            for user in similar_users:
+                                self.user_list[channel].remove(user)
                             self.irc_client_gui.update_user_list(channel)
                     self.server_feedback_buffer += raw_message + "\n"
                     self.irc_client_gui.update_server_feedback_text(raw_message)
@@ -273,7 +276,10 @@ class IRCClient:
                         if channel in self.user_list:
                             if join_user not in self.user_list[channel]:
                                 self.user_list[channel].append(join_user)
-                                self.irc_client_gui.update_user_list(channel)
+                            else:
+                                self.user_list[channel].remove(join_user)
+                                self.user_list[channel].append(join_user)  # To make sure the user is at the end of the list
+                            self.irc_client_gui.update_user_list(channel)
                         else:
                             self.user_list[channel] = [join_user]
                             self.irc_client_gui.update_user_list(channel)
@@ -304,6 +310,13 @@ class IRCClient:
                                 self.irc_client_gui.update_user_list(channel)
                     self.server_feedback_buffer += raw_message + "\n"
                     self.irc_client_gui.update_server_feedback_text(raw_message)
+
+                elif tokens.command == "MODE":
+                    channel = tokens.params[0]
+                    mode = tokens.params[1]
+                    if len(tokens.params) > 2:  # Ensure there's a target user for the mode change
+                        target_user = tokens.params[2]
+                        self.handle_mode_changes(channel, mode, target_user)
 
                 elif tokens.command == "PRIVMSG":
                     target = tokens.params[0]
@@ -375,6 +388,44 @@ class IRCClient:
                 self.message_queue.put(received_messages)
                 self.irc_client_gui.update_message_text(received_messages)
 
+    def handle_mode_changes(self, channel, mode, user):
+        if mode == "+o":
+            # If user already has voice (+v), upgrade to operator
+            if "+" + user in self.user_list[channel]:
+                self.user_list[channel].remove("+" + user)
+                self.user_list[channel].append("@" + user)
+                self.user_dual_privileges[user] = True
+            # Else if user is already in list without voice, just add operator status
+            elif user in self.user_list[channel]:
+                self.user_list[channel].remove(user)
+                self.user_list[channel].append("@" + user)
+        elif mode == "-o":
+            # If the user is an operator
+            if "@" + user in self.user_list[channel]:
+                self.user_list[channel].remove("@" + user)
+                # If they were given voice while being an operator, they should retain voice after de-op
+                if self.user_dual_privileges.get(user):
+                    self.user_list[channel].append("+" + user)
+                # If they were not given voice while being an operator, revert to normal user status
+                else:
+                    self.user_list[channel].append(user)
+                # If the user was tracked for dual privileges, remove them from that tracking
+                if user in self.user_dual_privileges:
+                    del self.user_dual_privileges[user]
+        elif mode == "+v":
+            # Give voice mode only if they are not an operator; if they are, mark them for dual privileges
+            if user in self.user_list[channel] and "@" + user not in self.user_list[channel]:
+                self.user_list[channel].remove(user)
+                self.user_list[channel].append("+" + user)
+            elif "@" + user in self.user_list[channel]:
+                self.user_dual_privileges[user] = True
+        elif mode == "-v":
+            # Take voice mode
+            if "+" + user in self.user_list[channel]:
+                self.user_list[channel].remove("+" + user)
+                self.user_list[channel].append(user)
+        self.irc_client_gui.update_user_list(channel)
+
     def log_message(self, channel, sender, message, is_sent=False):
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         if is_sent:
@@ -386,6 +437,12 @@ class IRCClient:
         filename = f'{directory}/irc_log_{channel.replace("/", "_")}.txt'
         with open(filename, 'a') as file:
             file.write(log_line + '\n')
+
+    def strip_nick_prefix(self, nickname):
+        # Strip '@' or '+' prefix from the nickname if present
+        if nickname.startswith('@') or nickname.startswith('+'):
+            return nickname[1:]
+        return nickname
 
     def notify_channel_activity(self, channel):
         #print(f'Activity in channel {channel}!')
@@ -440,7 +497,7 @@ class IRCClientGUI:
         self.joined_channels_label = tk.Label(self.user_list_frame, text="Channels:", bg="black", fg="#00bfff")
         self.joined_channels_label.pack()
 
-        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#00bfff", cursor="arrow")
+        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#FDFEFF", cursor="arrow")
         self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
 
         self.input_frame = tk.Frame(self.root)
@@ -553,15 +610,13 @@ class IRCClientGUI:
         self.server_feedback_text.insert(tk.END, message + "\n", "server_feedback")
         self.server_feedback_text.config(state=tk.DISABLED)
         self.server_feedback_text.see(tk.END)
-
-        #apply light blue text color to server feedback messages
         self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff") #make the server output blue because it's nice on the eyes.
 
     def update_user_list(self, channel):
         if channel in self.irc_client.user_list:
             users = self.irc_client.user_list[channel]
 
-            # Sort users based on symbols @, +, and none
+            #sort users based on symbols @, +, and none
             users_sorted = sorted(users, key=lambda user: (not user.startswith('@'), not user.startswith('+'), user))
 
             user_list_text = "\n".join(users_sorted)
@@ -573,10 +628,10 @@ class IRCClientGUI:
         self.user_list_text.insert(tk.END, user_list_text)
         self.user_list_text.config(state=tk.DISABLED)
 
-        # Remove the "selected" tag from the entire text widget
+        #remove the "selected" tag from the entire text widget
         self.user_list_text.tag_remove("selected", "1.0", tk.END)
 
-        # Apply the "selected" tag only to the specific channel entry
+        #apply the "selected" tag only to the specific channel entry
         if self.irc_client.current_channel == channel:
             self.user_list_text.tag_add("selected", "1.0", "1.end")
             self.update_window_title(self.irc_client.nickname, channel)
@@ -593,46 +648,46 @@ class IRCClientGUI:
         self.root.destroy()
 
     def handle_tab_complete(self, event):
-        #get the current input in the input entry field
+        # get the current input in the input entry field
         user_input = self.input_entry.get()
         cursor_pos = self.input_entry.index(tk.INSERT)
 
-        #get the last word (partial nick) before the cursor
+        # get the last word (partial nick) before the cursor
         match = re.search(r'\b\w+$', user_input[:cursor_pos])
         if match:
             partial_nick = match.group()
         else:
             return
 
-        #get the user list for the current channel
+        # get the user list for the current channel
         current_channel = self.irc_client.current_channel
         if current_channel in self.irc_client.user_list:
             user_list = self.irc_client.user_list[current_channel]
         else:
             return
 
-        #remove @ and + symbols from nicknames
+        # remove @ and + symbols from nicknames
         user_list_cleaned = [nick.lstrip('@+') for nick in user_list]
 
-        #find possible completions for the partial nick
+        # find possible completions for the partial nick
         completions = [nick for nick in user_list_cleaned if nick.startswith(partial_nick)]
 
         if len(completions) == 1:
-            #if there is a unique match, complete the nick
-            completed_nick = completions[0]
+            # if there is a unique match, complete the nick
+            completed_nick = completions[0] + ", "  # append ', ' to the nick
             remaining_text = user_input[cursor_pos:]
             completed_text = user_input[:cursor_pos - len(partial_nick)] + completed_nick + remaining_text
             self.input_entry.delete(0, tk.END)
             self.input_entry.insert(0, completed_text)
         elif completions:
-            #if there are multiple possible completions, display the common prefix
-            common_prefix = os.path.commonprefix(completions)
+            # if there are multiple possible completions, display the common prefix
+            common_prefix = os.path.commonprefix(completions) + ", "  # append ', ' to the prefix
             remaining_text = user_input[cursor_pos:]
             completed_text = user_input[:cursor_pos - len(partial_nick)] + common_prefix + remaining_text
             self.input_entry.delete(0, tk.END)
             self.input_entry.insert(0, completed_text)
 
-        #prevent default behavior of the Tab key
+        # prevent default behavior of the Tab key
         return 'break'
 
     def update_window_title(self, nickname, channel_name):
@@ -690,7 +745,7 @@ class IRCClientGUI:
         self.input_menu.add_command(label="Select All", command=self.select_all_text)
 
         self.input_entry.bind("<Button-3>", self.show_input_menu)
-        self.joined_channels_text.tag_configure("selected", background="#cc0000")
+        self.joined_channels_text.tag_configure("selected", background="#43c332")
         #self.user_list_text.tag_configure("selected", background="#444444")
 
     def show_input_menu(self, event):
