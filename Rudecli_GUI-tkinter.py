@@ -65,6 +65,7 @@ from queue import Queue
 
 
 class IRCClient:
+    MAX_MESSAGE_HISTORY_SIZE = 52
     def __init__(self):
         self.exit_event = threading.Event()
         self.joined_channels: list = []
@@ -77,7 +78,9 @@ class IRCClient:
         self.user_list = {}
         self.receive_thread = None
         self.stay_alive_thread = None
+        self.temp_user_list = {}
         self.user_dual_privileges = {}
+        self.user_list_lock = threading.Lock()
 
     def read_config(self, config_file):
         config = configparser.ConfigParser()
@@ -127,7 +130,14 @@ class IRCClient:
             if target_match:
                 target_channel = target_match.group(1)
                 # Add the sent message to the channel history
-                self.channel_messages.setdefault(target_channel, []).append((self.nickname, message))
+                if target_channel not in self.channel_messages:
+                    self.channel_messages[target_channel] = []
+                self.channel_messages[target_channel].append((self.nickname, message))
+
+                # Check if the message history size exceeds the maximum allowed
+                if len(self.channel_messages[target_channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
+                    # If the history exceeds the limit, remove the oldest messages to maintain the limit
+                    self.channel_messages[target_channel] = self.channel_messages[target_channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
 
             self.log_message(self.current_channel, self.nickname, message, is_sent=True)
 
@@ -142,7 +152,9 @@ class IRCClient:
         self.joined_channels.append(channel)
         self.channel_messages[channel] = []
         self.user_list[channel] = []
+        self.irc_client_gui.update_message_text(f'Joined channel: {channel}\r\n')
         print(f'Joined channel: {channel}')
+        time.sleep(1)
 
     def leave_channel(self, channel):
         self.send_message(f'PART {channel}')
@@ -150,6 +162,8 @@ class IRCClient:
             self.joined_channels.remove(channel)
         if channel in self.channel_messages:
             del self.channel_messages[channel]
+        if channel in self.user_list:
+            del self.user_list[channel]
         print(f'Left channel: {channel}')
         if self.current_channel == channel:
             self.current_channel = ''
@@ -168,23 +182,46 @@ class IRCClient:
         self.user_list[self.current_channel] =[]
         self.send_message(f'NAMES {self.current_channel}')
 
+    def strip_ansi_escape_sequences(self, text):
+        # Strip ANSI escape sequences
+        ansi_escape = re.compile(r'\x1B[@-_][0-?]*[ -/]*[@-~]')
+        cleaned_text = ansi_escape.sub('', text)
+
+        # Strip IRC color codes
+        irc_color = re.compile(r'\x03\d{1,2}(,\d{1,2})?')
+        return irc_color.sub('', cleaned_text)
+
     def handle_incoming_message(self):
+        remaining_data = ""
+
         while not self.exit_event.is_set():
-            data = self.irc.recv(4096).decode('UTF-8', errors='ignore')
+            data = self.irc.recv(12288).decode('UTF-8', errors='ignore')
+            data = self.strip_ansi_escape_sequences(data)
             if not data:
                 break
 
-            received_messages = ""
+            # Prepend any remaining_data from the previous iteration to the new data
+            data = remaining_data + data
 
+            received_messages = ""
+            self.server_feedback_buffer = ""
             messages = data.split('\r\n')
 
-            self.server_feedback_buffer = ""
-            self.whois_data = {}
+            # If the last message is incomplete, store it in remaining_data
+            if not data.endswith('\r\n'):
+                remaining_data = messages[-1]
+                messages = messages[:-1]
+            else:
+                remaining_data = ""
 
+            # Process each complete message
             for raw_message in messages:
+                # Skip empty lines or lines with only whitespace
+                raw_message = raw_message.strip()
+                if not raw_message:
+                    continue
+
                 try:
-                    if len(raw_message) == 0:
-                        continue
                     tokens = irctokens.tokenise(raw_message)
                 except ValueError as e:
                     print(f"Error: {e}")
@@ -208,11 +245,29 @@ class IRCClient:
                     self.irc_client_gui.update_server_feedback_text(raw_message)
 
                 elif tokens.command == "353":
-                    channel = tokens.params[2]
-                    users = tokens.params[3].split()
+                    # Depending on the number of params, adjust how we extract channel and users
+                    if len(tokens.params) == 4:
+                        channel = tokens.params[2]
+                        users = tokens.params[3].split()
+                    elif len(tokens.params) == 3:
+                        channel = tokens.params[1]
+                        users = tokens.params[2].split()
+                    else:
+                        print("Error: Unexpected format for the 353 command.")
+                        continue
 
-                    self.user_list[channel] = users
-                    self.irc_client_gui.update_user_list(channel)
+                    if channel not in self.temp_user_list:
+                        self.temp_user_list[channel] = []
+                    self.temp_user_list[channel].extend(users)  # Accumulate users in the temp list
+
+                elif tokens.command == "366":
+                    channel = tokens.params[1]
+                    
+                    with self.user_list_lock:
+                        if channel in self.temp_user_list:
+                            self.user_list[channel] = self.temp_user_list[channel]
+                            del self.temp_user_list[channel]
+                            self.irc_client_gui.update_user_list(channel)
 
                 elif tokens.command == "311":
                     # Handle WHOIS reply for user info
@@ -255,59 +310,65 @@ class IRCClient:
                         self.irc_client_gui.update_message_text(whois_response)
 
                 elif tokens.command == "PART":
-                    # Handle PART message to remove the user from the user list, including similar users with @ and +
                     if tokens.source is not None:
                         quit_user = tokens.hostmask.nickname
                         quit_user = self.strip_nick_prefix(quit_user)
                         channel = tokens.params[0]
-                        if channel in self.user_list:
-                            similar_users = [user for user in self.user_list[channel] if user == quit_user or user.startswith('@' + quit_user) or user.startswith('+' + quit_user)]
-                            for user in similar_users:
-                                self.user_list[channel].remove(user)
-                            self.irc_client_gui.update_user_list(channel)
+                        
+                        with self.user_list_lock:
+                            if channel in self.user_list:
+                                similar_users = [user for user in self.user_list[channel] if user == quit_user or user.startswith('@' + quit_user) or user.startswith('+' + quit_user)]
+                                for user in similar_users:
+                                    self.user_list[channel].remove(user)
+                                self.irc_client_gui.update_user_list(channel)
                     self.server_feedback_buffer += raw_message + "\n"
                     self.irc_client_gui.update_server_feedback_text(raw_message)
 
                 elif tokens.command == "JOIN":
-                    # Handle JOIN message to add the user to the user list
                     if tokens.source is not None:
                         join_user = tokens.hostmask.nickname
                         channel = tokens.params[0]
-                        if channel in self.user_list:
-                            if join_user not in self.user_list[channel]:
-                                self.user_list[channel].append(join_user)
+                        
+                        with self.user_list_lock:
+                            if channel in self.user_list:
+                                if join_user not in self.user_list[channel]:
+                                    self.user_list[channel].append(join_user)
+                                else:
+                                    self.user_list[channel].remove(join_user)
+                                    self.user_list[channel].append(join_user)  # To make sure the user is at the end of the list
+                                self.irc_client_gui.update_user_list(channel)
                             else:
-                                self.user_list[channel].remove(join_user)
-                                self.user_list[channel].append(join_user)  # To make sure the user is at the end of the list
-                            self.irc_client_gui.update_user_list(channel)
-                        else:
-                            self.user_list[channel] = [join_user]
-                            self.irc_client_gui.update_user_list(channel)
+                                self.user_list[channel] = [join_user]
+                                self.irc_client_gui.update_user_list(channel)
                     self.server_feedback_buffer += raw_message + "\n"
                     self.irc_client_gui.update_server_feedback_text(raw_message)
 
                 elif tokens.command == "QUIT":
-                    # Handle QUIT message to remove the user from the user list
                     if tokens.source is not None:
                         quit_user = tokens.hostmask.nickname
-                        quit_message = tokens.params[0]
-                        for channel in self.user_list:
-                            if quit_user in self.user_list[channel]:
-                                self.user_list[channel].remove(quit_user)
-                                self.irc_client_gui.update_user_list(channel)
+                        
+                        with self.user_list_lock:
+                            for channel in self.user_list:
+                                similar_users = [user for user in self.user_list[channel] if user == quit_user or user.startswith('@' + quit_user) or user.startswith('+' + quit_user)]
+                                for user in similar_users:
+                                    self.user_list[channel].remove(user)
+                                    self.irc_client_gui.update_user_list(channel)
                     self.server_feedback_buffer += raw_message + "\n"
                     self.irc_client_gui.update_server_feedback_text(raw_message)
 
                 elif tokens.command == "NICK":
-                    # Handle NICK message to update the user's nickname in the user list
                     if tokens.source is not None:
                         old_nickname = tokens.hostmask.nickname
                         new_nickname = tokens.params[0]
-                        for channel in self.user_list:
-                            if old_nickname in self.user_list[channel]:
-                                self.user_list[channel].remove(old_nickname)
-                                self.user_list[channel].append(new_nickname)
-                                self.irc_client_gui.update_user_list(channel)
+                        
+                        with self.user_list_lock:
+                            for channel in self.user_list:
+                                matching_users = [user for user in self.user_list[channel] if user.endswith(old_nickname)]
+                                for user in matching_users:
+                                    prefix = user[:-len(old_nickname)]
+                                    self.user_list[channel].remove(user)
+                                    self.user_list[channel].append(prefix + new_nickname)
+                                    self.irc_client_gui.update_user_list(channel)
                     self.server_feedback_buffer += raw_message + "\n"
                     self.irc_client_gui.update_server_feedback_text(raw_message)
 
@@ -317,6 +378,7 @@ class IRCClient:
                     if len(tokens.params) > 2:  # Ensure there's a target user for the mode change
                         target_user = tokens.params[2]
                         self.handle_mode_changes(channel, mode, target_user)
+                    self.irc_client_gui.update_server_feedback_text(raw_message)
 
                 elif tokens.command == "PRIVMSG":
                     target = tokens.params[0]
@@ -376,15 +438,19 @@ class IRCClient:
 
                 else:
                     if raw_message.startswith(':'):
-                        #move message starting with ":" to server feedback
+                        # move message starting with ":" to server feedback
                         self.server_feedback_buffer += raw_message + "\n"
                         self.irc_client_gui.update_server_feedback_text(raw_message)
                     else:
-                        #print other messages in the main chat window
+                        # print other messages in the main chat window
                         self.irc_client_gui.update_message_text(raw_message)
 
+                # Limit the chat history size for each channel
+                for channel in self.channel_messages:
+                    if len(self.channel_messages[channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
+                        self.channel_messages[channel] = self.channel_messages[channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
+
             if received_messages:
-                #print(received_messages, end="", flush=True)
                 self.message_queue.put(received_messages)
                 self.irc_client_gui.update_message_text(received_messages)
 
@@ -526,14 +592,21 @@ class IRCClientGUI:
         self.init_input_menu()
 
     def switch_channel(self, event):
-        #get the selected channel from the clicked position
+        # get the selected channel from the clicked position
         index = self.joined_channels_text.index("@%d,%d" % (event.x, event.y))
         line_num = int(index.split(".")[0])
         channel = self.joined_channels_text.get(f"{line_num}.0", f"{line_num}.end").strip()
 
         if channel in self.irc_client.joined_channels:
             self.irc_client.current_channel = channel
+
+            # Clear the main chat window
+            self.clear_chat_window()
+
+            # Display the history for the selected channel
             self.display_channel_messages()
+
+            # Update the window title with the current nickname and channel name
             self.update_window_title(self.irc_client.nickname, channel)
 
             # Highlight the selected channel
@@ -541,6 +614,11 @@ class IRCClientGUI:
                 self.joined_channels_text.tag_remove("selected", 1.0, tk.END)
             self.joined_channels_text.tag_add("selected", f"{line_num}.0", f"{line_num}.end")
             self.selected_channel = channel
+
+    def clear_chat_window(self):
+        self.message_text.config(state=tk.NORMAL)
+        self.message_text.delete(1.0, tk.END)
+        self.message_text.config(state=tk.DISABLED)
 
     def handle_input(self, event):
         user_input = self.input_entry.get().strip()
@@ -674,7 +752,7 @@ class IRCClientGUI:
 
         if len(completions) == 1:
             # if there is a unique match, complete the nick
-            completed_nick = completions[0] + ", "  # append ', ' to the nick
+            completed_nick = completions[0] + ": "  # append ', ' to the nick
             remaining_text = user_input[cursor_pos:]
             completed_text = user_input[:cursor_pos - len(partial_nick)] + completed_nick + remaining_text
             self.input_entry.delete(0, tk.END)
@@ -708,16 +786,31 @@ class IRCClientGUI:
             timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
             self.message_text.config(state=tk.NORMAL)
             lines = text.split('\n')
-            cleaned_lines = [line.rstrip('\r') for line in lines]  #remove trailing '\r' characters
+            cleaned_lines = [line.rstrip('\r') for line in lines]  # remove trailing '\r' characters
             cleaned_text = '\n'.join(cleaned_lines)
-            timestamped_text = timestamp + cleaned_text  #add timestamp to each line
+            timestamped_text = timestamp + cleaned_text  # add timestamp to each line
             self.message_text.insert(tk.END, timestamped_text)
             self.message_text.config(state=tk.DISABLED)
             self.message_text.see(tk.END)
 
-            #apply green text color<3
+            # apply #C0FFEE text color
             self.message_text.tag_configure("brightgreen", foreground="#C0FFEE")
             self.message_text.tag_add("brightgreen", "1.0", "end")
+
+            # apply blue color to nicknames
+            self.message_text.tag_configure("nickname_color", foreground="#9fadfd")
+            start_idx = "1.0"
+            while True:
+                start_idx = self.message_text.search('<', start_idx, stopindex=tk.END)
+                if not start_idx:
+                    break
+                end_idx = self.message_text.search('>', start_idx, stopindex=tk.END)
+                if end_idx:
+                    end_idx = f"{end_idx}+1c"  # Include the '>' character
+                    self.message_text.tag_add("nickname_color", start_idx, end_idx)
+                    start_idx = end_idx
+                else:
+                    break
 
         self.root.after(0, _update_message_text)
 
@@ -725,7 +818,7 @@ class IRCClientGUI:
         channel = self.irc_client.current_channel
         if channel in self.irc_client.channel_messages:
             messages = self.irc_client.channel_messages[channel]
-            text = f'Messages in channel {channel}:\n'
+            text = f'                        *******Messages in channel {channel}:\n'
             for sender, message in messages:
                 if message.startswith(f'PRIVMSG {channel} :'):
                     message = message[len(f'PRIVMSG {channel} :'):]
