@@ -80,6 +80,7 @@ class IRCClient:
         self.stay_alive_thread = None
         self.temp_user_list = {}
         self.user_dual_privileges = {}
+        self.whois_data = {}
         self.user_list_lock = threading.Lock()
 
     def read_config(self, config_file):
