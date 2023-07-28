@@ -300,6 +300,30 @@ class IRCClient:
                     if self.whois_data.get(nickname):
                         self.whois_data[nickname]["Idle Time"] = idle_time
 
+                elif tokens.command == "319":
+                    # Handle WHOIS reply for channels the user is in
+                    nickname = tokens.params[1]
+                    channels = tokens.params[2]
+                    self.whois_data[nickname]["Channels"] = channels
+
+                elif tokens.command == "301":
+                    # Handle WHOIS reply for user's away status
+                    nickname = tokens.params[1]
+                    away_message = tokens.params[2]
+                    self.whois_data[nickname]["Away"] = away_message
+
+                elif tokens.command == "671":
+                    # Handle WHOIS reply for user's secure connection status
+                    nickname = tokens.params[1]
+                    secure_message = tokens.params[2]
+                    self.whois_data[nickname]["Secure Connection"] = secure_message
+
+                elif tokens.command == "338":
+                    # Handle WHOIS reply for user's actual IP address
+                    nickname = tokens.params[1]
+                    ip_address = tokens.params[2]
+                    self.whois_data[nickname]["Actual IP"] = ip_address
+
                 elif tokens.command == "318":
                     # End of WHOIS reply
                     nickname = tokens.params[1]
