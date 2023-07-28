@@ -80,6 +80,7 @@ class IRCClient:
         self.stay_alive_thread = None
         self.temp_user_list = {}
         self.user_dual_privileges = {}
+        self.whois_data = {}
         self.user_list_lock = threading.Lock()
 
     def read_config(self, config_file):
@@ -684,6 +685,7 @@ class IRCClientGUI:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
 
     def update_server_feedback_text(self, message):
+        message = message.replace('\r', '')
         self.server_feedback_text.config(state=tk.NORMAL)
         self.server_feedback_text.insert(tk.END, message + "\n", "server_feedback")
         self.server_feedback_text.config(state=tk.DISABLED)
