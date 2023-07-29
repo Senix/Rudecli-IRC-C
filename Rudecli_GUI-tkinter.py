@@ -50,6 +50,7 @@ IRCClientGUI class:
 
 import configparser
 import datetime
+import fnmatch
 import irctokens
 import os
 import re
@@ -79,6 +80,8 @@ class IRCClient:
         self.receive_thread = None
         self.stay_alive_thread = None
         self.temp_user_list = {}
+        self.ignore_list = []
+        self.load_ignore_list()
         self.user_dual_privileges = {}
         self.whois_data = {}
         self.user_list_lock = threading.Lock()
@@ -183,7 +186,6 @@ class IRCClient:
             time.sleep(195)
             param = self.server
             self.send_message(f'PING {param}')
-            print(f'Sent Keep Alive: Ping')
 
     def ping_server(self, target=None):
         if target:
@@ -253,7 +255,6 @@ class IRCClient:
                     ping_param = tokens.params[0]
                     pong_response = f'PONG {ping_param}'
                     self.send_message(pong_response)
-                    print(f'PING received: Response: PONG')
 
                 elif tokens.command == "NOTICE" or tokens.command == "ERROR":
                     #process server feedback message
@@ -422,6 +423,10 @@ class IRCClient:
                 elif tokens.command == "PRIVMSG":
                     target = tokens.params[0]
                     message_content = tokens.params[1]
+                    if self.should_ignore(sender): #ignore based on hostmask
+                        continue
+                    if sender in self.ignore_list: #ignore based on nick
+                        continue
                     if self.nickname in message_content:
                         self.trigger_beep_notification()
 
@@ -431,7 +436,7 @@ class IRCClient:
 
                         if ctcp_command == "VERSION":
                             #respond to VERSION request
-                            version_reply = "\x01VERSION RudeGUI-IRC-C v1.4\x01"
+                            version_reply = "\x01VERSION RudeGUI-IRC-C v1.8-1\x01"
                             self.send_message(f'PRIVMSG {sender} :{version_reply}')
                         elif ctcp_command == "CTCP":
                             #respond to CTCP request
@@ -565,6 +570,22 @@ class IRCClient:
         filename = f'{directory}/irc_log_{channel.replace("/", "_")}.txt'
         with open(filename, 'a') as file:
             file.write(log_line + '\n')
+
+    def save_ignore_list(self): #ignore them
+        with open("ignore_list.txt", "w") as f:
+            for user in self.ignore_list:
+                f.write(f"{user}\n")
+
+    def load_ignore_list(self):
+        if os.path.exists("ignore_list.txt"):
+            with open("ignore_list.txt", "r") as f:
+                self.ignore_list = [line.strip() for line in f.readlines()]
+
+    def should_ignore(self, hostmask):
+        for pattern in self.ignore_list:
+            if fnmatch.fnmatch(hostmask, pattern):
+                return True
+        return False
 
     def strip_nick_prefix(self, nickname):
         # Strip '@' or '+' prefix from the nickname if present
@@ -740,6 +761,8 @@ class IRCClientGUI:
                 self.update_message_text(f'/quit closes connection with network\r\n')
                 self.update_message_text(f'/ping to ping the connected server\r\n')
                 self.update_message_text(f'    -or /ping usernick to ping specific user\r\n')
+                self.update_message_text(f'/unignore & /ignore to unignore/ignore a specific user\r\n')
+                self.update_message_text(f'    -Example: /ignore nickname & /unignore nickname\r\n')
                 self.update_message_text(f'/clear to clear the chat window\r\n')
                 self.update_message_text(f'Exit button will also send /quit and close client\r\n')
             case "me":
@@ -770,6 +793,23 @@ class IRCClientGUI:
                 self.irc_client.ping_server(target)
             case "clear":
                 self.clear_chat_window()
+            case "ignore":
+                user_to_ignore = user_input.split()[1]
+                if user_to_ignore:
+                    if user_to_ignore not in self.irc_client.ignore_list:
+                        self.irc_client.ignore_list.append(user_to_ignore)
+                        self.update_message_text(f"You've ignored {user_to_ignore}.\r\n")
+                    else:
+                        self.update_message_text(f"{user_to_ignore} is already in your ignore list.\r\n")
+                else:
+                    self.update_message_text("Invalid usage. Usage: /ignore <nickname|hostmask>\r\n")
+            case "unignore":
+                user_to_unignore = user_input.split()[1]
+                if user_to_unignore in self.irc_client.ignore_list:
+                    self.irc_client.ignore_list.remove(user_to_unignore)
+                    self.update_message_text(f"You've unignored {user_to_unignore}.\r\n")
+                else:
+                    self.update_message_text(f"{user_to_unignore} is not in your ignore list.\r\n")
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
 
@@ -812,6 +852,8 @@ class IRCClientGUI:
         self.joined_channels_text.config(state=tk.DISABLED)
 
     def handle_exit(self):
+        self.irc_client.save_ignore_list()
+        self.irc_client.send_message('QUIT')
         self.irc_client.exit_event.set()  
         self.irc_client.irc.shutdown(socket.SHUT_RDWR)
         self.root.destroy()
@@ -866,9 +908,9 @@ class IRCClientGUI:
         if channel_name:
             title_parts.append(channel_name)
         if title_parts:
-            self.root.title("RudeGUI-IRC-C - " + " | ".join(title_parts))
+            self.root.title("Rude GUI" + " | ".join(title_parts))
         else:
-            self.root.title("RudeGUI-IRC-C")
+            self.root.title("Rude GUI")
 
         self.nickname_label.config(text=f"{channel_name} $ {nickname} $> ")
 
