@@ -1,6 +1,6 @@
 """
 RudeCli-IRC-C: Rudimentary Command Line Interface IRC Client.
-RudeCli assumes config.rude is available and configed properly:
+RudeCli assumes conf.rude is available and configed properly:
 
 Config Example:
 
@@ -196,26 +196,26 @@ class IRCClient:
         remaining_data = ""
 
         while not self.exit_event.is_set():
-            data = self.irc.recv(12288).decode('UTF-8', errors='ignore')
+            data = self.irc.recv(4096).decode('UTF-8', errors='ignore')
             data = self.strip_ansi_escape_sequences(data)
             if not data:
                 break
 
-            # Prepend any remaining_data from the previous iteration to the new data
+            #prepend any remaining_data from the previous iteration to the new data
             data = remaining_data + data
 
             received_messages = ""
             self.server_feedback_buffer = ""
             messages = data.split('\r\n')
 
-            # If the last message is incomplete, store it in remaining_data
+            #if the last message is incomplete, store it in remaining_data
             if not data.endswith('\r\n'):
                 remaining_data = messages[-1]
                 messages = messages[:-1]
             else:
                 remaining_data = ""
 
-            # Process each complete message
+            #process each complete message
             for raw_message in messages:
                 # Skip empty lines or lines with only whitespace
                 raw_message = raw_message.strip()
@@ -246,7 +246,6 @@ class IRCClient:
                     self.irc_client_gui.update_server_feedback_text(raw_message)
 
                 elif tokens.command == "353":
-                    # Depending on the number of params, adjust how we extract channel and users
                     if len(tokens.params) == 4:
                         channel = tokens.params[2]
                         users = tokens.params[3].split()
@@ -408,6 +407,8 @@ class IRCClient:
                 elif tokens.command == "PRIVMSG":
                     target = tokens.params[0]
                     message_content = tokens.params[1]
+                    if self.nickname in message_content:
+                        self.trigger_beep_notification()
 
                     if message_content.startswith("\x01") and message_content.endswith("\x01"):
                         #CTCP request received
@@ -470,7 +471,7 @@ class IRCClient:
                         # print other messages in the main chat window
                         self.irc_client_gui.update_message_text(raw_message)
 
-                # Limit the chat history size for each channel
+                # limit the chat history size for each channel
                 for channel in self.channel_messages:
                     if len(self.channel_messages[channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
                         self.channel_messages[channel] = self.channel_messages[channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
@@ -481,17 +482,17 @@ class IRCClient:
 
     def handle_mode_changes(self, channel, mode, user):
         if mode == "+o":
-            # If user already has voice (+v), upgrade to operator
+            #if user already has voice (+v), upgrade to operator
             if "+" + user in self.user_list[channel]:
                 self.user_list[channel].remove("+" + user)
                 self.user_list[channel].append("@" + user)
                 self.user_dual_privileges[user] = True
-            # Else if user is already in list without voice, just add operator status
+            #else if user is already in list without voice, just add operator status
             elif user in self.user_list[channel]:
                 self.user_list[channel].remove(user)
                 self.user_list[channel].append("@" + user)
         elif mode == "-o":
-            # If the user is an operator
+            #if the user is an operator
             if "@" + user in self.user_list[channel]:
                 self.user_list[channel].remove("@" + user)
                 # If they were given voice while being an operator, they should retain voice after de-op
@@ -516,6 +517,24 @@ class IRCClient:
                 self.user_list[channel].remove("+" + user)
                 self.user_list[channel].append(user)
         self.irc_client_gui.update_user_list(channel)
+
+    def trigger_beep_notification(self):
+        try:
+            if sys.platform.startswith("linux"):
+                # Linux-specific notification sound using paplay
+                sound_path = os.path.join(os.getcwd(), "Sounds", "Notification4.wav")
+                os.system(f"paplay {sound_path}")
+            elif sys.platform == "darwin":
+                # macOS-specific notification sound using afplay
+                os.system("afplay /System/Library/Sounds/Ping.aiff")
+            else:
+                # For other platforms, use pygame as the fallback
+                import pygame
+                pygame.mixer.init()
+                sound = pygame.mixer.Sound("ping.oga")
+                sound.play()
+        except Exception as e:
+            print(f"Beep notification error: {e}")
 
     def log_message(self, channel, sender, message, is_sent=False):
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -565,10 +584,16 @@ class IRCClientGUI:
         self.exit_event = irc_client.exit_event
 
         self.root = tk.Tk()
-        self.root.title("RudeCLI-IRC-C")
+        self.root.title("RudeGUI-IRC-C")
         self.root.geometry("1000x600")
         #self.root.iconbitmap("favicon.ico")
         self.selected_channel = None
+        self.menu_bar = tk.Menu(self.root)
+        self.root.config(menu=self.menu_bar)
+        self.settings_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.menu_bar.add_cascade(label="Settings", menu=self.settings_menu)
+        self.settings_menu.add_command(label="Configure", command=self.open_config_window)
+
 
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5)
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
@@ -615,6 +640,18 @@ class IRCClientGUI:
         #bind a callback function to the channel list text widget
         self.joined_channels_text.bind("<Button-1>", self.switch_channel)
         self.init_input_menu()
+
+    def open_config_window(self):
+        current_config = {
+            "nickname": self.irc_client.nickname,
+            "server": self.irc_client.server,
+            "auto_join_channels": self.irc_client.auto_join_channels,
+            "nickserv_password": self.irc_client.nickserv_password,
+            "port": self.irc_client.port,
+            "ssl_enabled": self.irc_client.ssl_enabled,
+        }
+        config_window = ConfigWindow(current_config)
+        config_window.mainloop()
 
     def switch_channel(self, event):
         # get the selected channel from the clicked position
@@ -674,6 +711,8 @@ class IRCClientGUI:
             case "help":
                 self.update_message_text(f'/join to join a channel\r\n')
                 self.update_message_text(f'/part to leave a channel\r\n')
+                self.update_message_text(f'/whois to whois a specific user\r\n')
+                self.update_message_text(f'    -Example: /whois nickname\r\n')
                 self.update_message_text(f'/ch to list joined channels\r\n')
                 self.update_message_text(f'/sw <channel> to switch to given channel\r\n')
                 self.update_message_text(f'    -You can also click channels to switch\r\n')
@@ -838,6 +877,18 @@ class IRCClientGUI:
                 else:
                     break
 
+            # apply orangered color to main user's name
+            self.message_text.tag_configure("main_user_color", foreground="#FF4500")
+            start_idx = "1.0"
+            main_user_name = self.irc_client.nickname
+            while True:
+                start_idx = self.message_text.search(main_user_name, start_idx, stopindex=tk.END)
+                if not start_idx:
+                    break
+                end_idx = f"{start_idx}+{len(main_user_name)}c"
+                self.message_text.tag_add("main_user_color", start_idx, end_idx)
+                start_idx = end_idx
+
         self.root.after(0, _update_message_text)
 
     def display_channel_messages(self):
@@ -898,6 +949,91 @@ class IRCClientGUI:
             time.sleep(0.1)
         self.irc_client.receive_thread.join()
         self.root.quit()
+
+
+class ConfigWindow(tk.Toplevel):
+    def __init__(self, current_config):
+        super().__init__()
+        self.title("Configuration")
+        self.geometry("400x250")
+
+        # Labels
+        label_name = tk.Label(self, text="Nickname:")
+        label_name.grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+
+        label_server = tk.Label(self, text="Server Address:")
+        label_server.grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+
+        label_channels = tk.Label(self, text="Auto-join Channels (comma-separated):")
+        label_channels.grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
+
+        label_password = tk.Label(self, text="Password:")
+        label_password.grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
+
+        label_port = tk.Label(self, text="Port:")
+        label_port.grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
+
+        label_ssl = tk.Label(self, text="SSL Enabled:")
+        label_ssl.grid(row=5, column=0, padx=5, pady=5, sticky=tk.W)
+
+        # Entry fields
+        self.entry_name = tk.Entry(self)
+        self.entry_name.grid(row=0, column=1, padx=5, pady=5)
+
+        self.entry_server = tk.Entry(self)
+        self.entry_server.grid(row=1, column=1, padx=5, pady=5)
+
+        self.entry_channels = tk.Entry(self)
+        self.entry_channels.grid(row=2, column=1, padx=5, pady=5)
+
+        self.entry_password = tk.Entry(self, show="*")  # Mask the password with '*'
+        self.entry_password.grid(row=3, column=1, padx=5, pady=5)
+
+        self.entry_port = tk.Entry(self)
+        self.entry_port.grid(row=4, column=1, padx=5, pady=5)
+
+        self.entry_ssl = tk.BooleanVar()
+        self.checkbox_ssl = tk.Checkbutton(self, variable=self.entry_ssl)
+        self.checkbox_ssl.grid(row=5, column=1, padx=5, pady=5)
+
+        # Save Button
+        save_button = tk.Button(self, text="Save Configuration", command=self.save_config)
+        save_button.grid(row=6, column=0, columnspan=2, padx=5, pady=5)
+
+        # Set the current configuration values in the entry fields
+        self.entry_name.insert(0, current_config["nickname"])
+        self.entry_server.insert(0, current_config["server"])
+        self.entry_channels.insert(0, ", ".join(current_config["auto_join_channels"]))
+        self.entry_password.insert(0, current_config["nickserv_password"])
+        self.entry_port.insert(0, current_config["port"])
+        self.entry_ssl.set(current_config["ssl_enabled"])
+
+    def save_config(self):
+        user_nick = self.entry_name.get()
+        server_address = self.entry_server.get()
+        channels = self.entry_channels.get()
+        password = self.entry_password.get()
+        port = self.entry_port.get()
+        ssl_enabled = self.entry_ssl.get()
+
+        # Create a new configparser object
+        config = configparser.ConfigParser()
+
+        # Update the configuration values directly
+        config["IRC"] = {
+            "nickname": user_nick,
+            "server": server_address,
+            "auto_join_channels": channels,
+            "nickserv_password": password,
+            "port": port,
+            "ssl_enabled": ssl_enabled,
+        }
+
+        # Write the updated configuration to the conf.rude file
+        with open("conf.rude", "w") as config_file:
+            config.write(config_file)
+
+        self.destroy()
 
 def main():
     """The Main Function for the RudeGUI IRC Client."""
