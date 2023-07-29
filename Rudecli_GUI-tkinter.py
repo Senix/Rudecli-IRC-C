@@ -154,7 +154,6 @@ class IRCClient:
     def change_nickname(self, new_nickname):
         self.send_message(f'NICK {new_nickname}')
         self.nickname = new_nickname
-        print(f'Nickname changed to: {new_nickname}')
         self.irc_client_gui.update_message_text(f'Nickname changed to: {new_nickname}\n')
 
     def join_channel(self, channel):
@@ -163,7 +162,6 @@ class IRCClient:
         self.channel_messages[channel] = []
         self.user_list[channel] = []
         self.irc_client_gui.update_message_text(f'Joined channel: {channel}\r\n')
-        print(f'Joined channel: {channel}')
         time.sleep(1)
 
     def leave_channel(self, channel):
@@ -174,7 +172,6 @@ class IRCClient:
             del self.channel_messages[channel]
         if channel in self.user_list:
             del self.user_list[channel]
-        print(f'Left channel: {channel}')
         if self.current_channel == channel:
             self.current_channel = ''
 
@@ -182,11 +179,18 @@ class IRCClient:
         self.send_message('LIST')
 
     def keep_alive(self):
-        while True:
+        while not self.exit_event.is_set():
             time.sleep(195)
             param = self.server
             self.send_message(f'PING {param}')
             print(f'Sent Keep Alive: Ping')
+
+    def ping_server(self, target=None):
+        if target:
+            param = target
+        else:
+            param = self.server
+        self.send_message(f'PING {param}')
 
     def sync_user_list(self):
         self.user_list[self.current_channel] =[]
@@ -569,8 +573,6 @@ class IRCClient:
         return nickname
 
     def notify_channel_activity(self, channel):
-        #print(f'Activity in channel {channel}!')
-        #self.irc_client_gui.update_message_text(f'Activity in channel {channel}!\r\n')
         self.irc_client_gui.update_server_feedback_text(f'Activity in channel {channel}!\r')
 
     def whois(self, target):
@@ -579,9 +581,11 @@ class IRCClient:
     def start(self):
         self.connect()
         self.receive_thread = threading.Thread(target=self.handle_incoming_message)
+        self.receive_thread.daemon = True
         self.receive_thread.start()
 
         self.stay_alive_thread = threading.Thread(target=self.keep_alive)
+        self.stay_alive_thread.daemon = True
         self.stay_alive_thread.start()
 
         self.gui_handler()
@@ -648,7 +652,9 @@ class IRCClientGUI:
         self.root.grid_columnconfigure(0, weight=3)
         self.root.grid_columnconfigure(1, weight=1)
 
-        threading.Thread(target=self.irc_client.start).start()
+        self.client_start_thread = threading.Thread(target=self.irc_client.start)
+        self.client_start_thread.daemon = True 
+        self.client_start_thread.start()
         self.irc_client.irc_client_gui = self
 
         #bind a callback function to the channel list text widget
@@ -732,6 +738,9 @@ class IRCClientGUI:
                 self.update_message_text(f'/msg to send a direct message\r\n')
                 self.update_message_text(f'    -Example: /msg NickServ IDENTIFY\r\n')
                 self.update_message_text(f'/quit closes connection with network\r\n')
+                self.update_message_text(f'/ping to ping the connected server\r\n')
+                self.update_message_text(f'    -or /ping usernick to ping specific user\r\n')
+                self.update_message_text(f'/clear to clear the chat window\r\n')
                 self.update_message_text(f'Exit button will also send /quit and close client\r\n')
             case "me":
                 action_content = user_input.split(' ', 1)[1]
@@ -755,6 +764,12 @@ class IRCClientGUI:
             case "whois":
                 target = user_input.split()[1]
                 self.irc_client.whois(target)
+            case "ping":
+                parts = user_input.split()
+                target = parts[1] if len(parts) > 1 else None
+                self.irc_client.ping_server(target)
+            case "clear":
+                self.clear_chat_window()
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
 
