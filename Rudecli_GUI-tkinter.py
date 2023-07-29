@@ -48,20 +48,20 @@ IRCClientGUI class:
 """
 
 
-import ssl
-import socket
-import sys
-import threading
 import configparser
-import time
 import datetime
 import irctokens
-import re
 import os
+import re
+import socket
+import ssl
+import sys
+import threading
+import time
 import tkinter as tk
+from queue import Queue
 from tkinter import messagebox, scrolledtext, Menu
 from tkinter.constants import *
-from queue import Queue
 
 
 class IRCClient:
@@ -121,26 +121,35 @@ class IRCClient:
             self.join_channel(channel)
 
     def send_message(self, message):
+        # Generate timestamp
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
+        timestamped_message_for_display = f"{timestamp} {message}"
+
+        # Define message_without_timestamp as the original message
+        message_without_timestamp = message
+
         if message == '/quit':
             self.irc.send(bytes(f'QUIT\r\n', 'UTF-8'))
         else:
+            # Send to server, no timestamp
             self.irc.send(bytes(f'{message}\r\n', 'UTF-8'))
 
             # Extract the target channel from the message
             target_match = re.match(r'PRIVMSG (\S+)', message)
             if target_match:
                 target_channel = target_match.group(1)
-                # Add the sent message to the channel history
+                # Add the sent message to the channel history (with timestamp for display)
                 if target_channel not in self.channel_messages:
                     self.channel_messages[target_channel] = []
-                self.channel_messages[target_channel].append((self.nickname, message))
+                self.channel_messages[target_channel].append((timestamp, self.nickname, message_without_timestamp))
 
                 # Check if the message history size exceeds the maximum allowed
                 if len(self.channel_messages[target_channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
                     # If the history exceeds the limit, remove the oldest messages to maintain the limit
                     self.channel_messages[target_channel] = self.channel_messages[target_channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
 
-            self.log_message(self.current_channel, self.nickname, message, is_sent=True)
+                # Log the message with the timestamp for display
+                self.log_message(self.current_channel, self.nickname, timestamped_message_for_display, is_sent=True)
 
     def change_nickname(self, new_nickname):
         self.send_message(f'NICK {new_nickname}')
@@ -217,6 +226,8 @@ class IRCClient:
 
             #process each complete message
             for raw_message in messages:
+                # Generate timestamp
+                timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
                 # Skip empty lines or lines with only whitespace
                 raw_message = raw_message.strip()
                 if not raw_message:
@@ -436,18 +447,18 @@ class IRCClient:
                                 action_message = f'* {sender} {action_content}'
                                 if target not in self.channel_messages:
                                     self.channel_messages[target] = []
-                                self.channel_messages[target].append((sender, action_message))
+                                self.channel_messages[target].append((timestamp, sender, action_message))
                                 if target == self.current_channel:
-                                    received_messages += f'{action_message}\n'
+                                    received_messages += f'{timestamp} {action_message}\n'
                                 else:
                                     self.notify_channel_activity(target)
                                 self.log_message(target, sender, action_message, is_sent=False)
                             else:
                                 if target not in self.channel_messages:
                                     self.channel_messages[target] = []
-                                self.channel_messages[target].append((sender, message_content))
+                                self.channel_messages[target].append((timestamp, sender, message_content))
                                 if target == self.current_channel:
-                                    received_messages += f'<{sender}> {message_content}\n'
+                                    received_messages += f'{timestamp} <{sender}> {message_content}\n'
                                 else:
                                     self.notify_channel_activity(target)
 
@@ -456,9 +467,9 @@ class IRCClient:
                     else:
                         if target not in self.channel_messages:
                             self.channel_messages[target] = []
-                        self.channel_messages[target].append((sender, message_content))
+                        self.channel_messages[target].append((timestamp, sender, message_content))
                         if target == self.current_channel:
-                            received_messages += f'<{sender}> {message_content}\n'
+                            received_messages += f'{timestamp} <{sender}> {message_content}\n'
                         else:
                             self.notify_channel_activity(target)
 
@@ -527,12 +538,15 @@ class IRCClient:
             elif sys.platform == "darwin":
                 # macOS-specific notification sound using afplay
                 os.system("afplay /System/Library/Sounds/Ping.aiff")
+            elif sys.platform == "win32":
+                # Windows-specific notification using winsound
+                import winsound
+                duration = 1000  # milliseconds
+                frequency = 440  # Hz
+                winsound.Beep(frequency, duration)
             else:
-                # For other platforms, use pygame as the fallback
-                import pygame
-                pygame.mixer.init()
-                sound = pygame.mixer.Sound("ping.oga")
-                sound.play()
+                # For other platforms, print a message
+                print("Beep notification not supported on this platform.")
         except Exception as e:
             print(f"Beep notification error: {e}")
 
@@ -664,11 +678,7 @@ class IRCClientGUI:
 
             # Clear the main chat window
             self.clear_chat_window()
-
-            # Display the history for the selected channel
             self.display_channel_messages()
-
-            # Update the window title with the current nickname and channel name
             self.update_window_title(self.irc_client.nickname, channel)
 
             # Highlight the selected channel
@@ -684,11 +694,12 @@ class IRCClientGUI:
 
     def handle_input(self, event):
         user_input = self.input_entry.get().strip()
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
         if user_input[0] == "/":
             self._command_parser(user_input, user_input[1:].split()[0])
         else:
             self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{user_input}')
-            self.update_message_text(f'<{self.irc_client.nickname}> {user_input}\r\n')
+            self.update_message_text(f'{timestamp} <{self.irc_client.nickname}> {user_input}\r\n')
         self.input_entry.delete(0, tk.END)
 
     def _command_parser(self, user_input:str, command: str):
@@ -848,13 +859,11 @@ class IRCClientGUI:
 
     def update_message_text(self, text):
         def _update_message_text():
-            timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
             self.message_text.config(state=tk.NORMAL)
             lines = text.split('\n')
             cleaned_lines = [line.rstrip('\r') for line in lines]  # remove trailing '\r' characters
             cleaned_text = '\n'.join(cleaned_lines)
-            timestamped_text = timestamp + cleaned_text  # add timestamp to each line
-            self.message_text.insert(tk.END, timestamped_text)
+            self.message_text.insert(tk.END, cleaned_text)
             self.message_text.config(state=tk.DISABLED)
             self.message_text.see(tk.END)
 
@@ -895,16 +904,14 @@ class IRCClientGUI:
         channel = self.irc_client.current_channel
         if channel in self.irc_client.channel_messages:
             messages = self.irc_client.channel_messages[channel]
-            text = f'                        *******Messages in channel {channel}:\n'
-            for sender, message in messages:
+            text = f'                                 *******Messages in channel {channel}:\n'
+            for timestamp, sender, message in messages:
                 if message.startswith(f'PRIVMSG {channel} :'):
                     message = message[len(f'PRIVMSG {channel} :'):]
-                timestamp = datetime.datetime.now().strftime('[%H:%M:%S]')
                 text += f'{timestamp} <{sender}> {message}\n'
             self.update_message_text(text)
         else:
             self.update_message_text('No messages to display in the current channel.')
-
         self.update_user_list(channel)
 
     def init_input_menu(self):
@@ -1016,6 +1023,7 @@ class ConfigWindow(tk.Toplevel):
         port = self.entry_port.get()
         ssl_enabled = self.entry_ssl.get()
 
+        # Create a new configparser object
         config = configparser.ConfigParser()
 
         # Update the configuration values directly
