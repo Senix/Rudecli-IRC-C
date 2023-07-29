@@ -1016,7 +1016,6 @@ class ConfigWindow(tk.Toplevel):
         port = self.entry_port.get()
         ssl_enabled = self.entry_ssl.get()
 
-        # Create a new configparser object
         config = configparser.ConfigParser()
 
         # Update the configuration values directly
