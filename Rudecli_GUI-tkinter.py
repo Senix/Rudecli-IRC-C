@@ -60,6 +60,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkFont
 from queue import Queue
 from tkinter import messagebox, scrolledtext, Menu
 from tkinter.constants import *
@@ -453,7 +454,7 @@ class IRCClient:
                         else:
                             if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
                                 action_content = message_content[8:-1]
-                                action_message = f'* {sender} {action_content}'
+                                action_message = f' * {sender} {action_content}'
                                 if target not in self.channel_messages:
                                     self.channel_messages[target] = []
                                 self.channel_messages[target].append((timestamp, sender, action_message))
@@ -583,7 +584,7 @@ class IRCClient:
 
     def should_ignore(self, hostmask):
         for pattern in self.ignore_list:
-            if fnmatch.fnmatch(hostmask, pattern):
+            if fnmatch.fnmatch(hostmask.lower(), pattern.lower()):
                 return True
         return False
 
@@ -624,8 +625,9 @@ class IRCClientGUI:
 
         self.root = tk.Tk()
         self.root.title("RudeGUI-IRC-C")
-        self.root.geometry("1000x600")
-        #self.root.iconbitmap("favicon.ico")
+        self.root.geometry("1200x600")
+        self.icon_image = tk.PhotoImage(file=os.path.join(os.getcwd(), "rude.png"))
+        self.root.iconphoto(True, self.icon_image)
         self.selected_channel = None
         self.menu_bar = tk.Menu(self.root)
         self.root.config(menu=self.menu_bar)
@@ -633,11 +635,14 @@ class IRCClientGUI:
         self.menu_bar.add_cascade(label="Settings", menu=self.settings_menu)
         self.settings_menu.add_command(label="Configure", command=self.open_config_window)
 
+        self.chat_font = tkFont.Font(family="Liberation Mono", size=10)
+        self.channel_user_list_font = tkFont.Font(family="Monospace", size=10)
+        self.server_font = tkFont.Font(family="Monospace", size=10)
 
-        self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5)
+        self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
 
-        self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ffffff")
+        self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ffffff", font=self.chat_font)
         self.message_text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
 
         self.user_list_frame = tk.Frame(self.root, width=100, height=400, bg="black")
@@ -646,19 +651,19 @@ class IRCClientGUI:
         self.user_list_label = tk.Label(self.user_list_frame, text="User List:", bg="black", fg="#c1b1e5")
         self.user_list_label.pack()
 
-        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#c1b1e5", cursor="arrow")
+        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#c1b1e5", cursor="arrow", font=self.channel_user_list_font)
         self.user_list_text.pack(fill=tk.BOTH, expand=True)
 
         self.joined_channels_label = tk.Label(self.user_list_frame, text="Channels:", bg="black", fg="#00bfff")
         self.joined_channels_label.pack()
 
-        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#FDFEFF", cursor="arrow")
+        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#FDFEFF", cursor="arrow", font=self.channel_user_list_font)
         self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
 
         self.input_frame = tk.Frame(self.root)
         self.input_frame.grid(row=2, column=0, sticky="ew", padx=1, pady=1)
 
-        self.nickname_label = tk.Label(self.input_frame, text=f" $ {self.irc_client.nickname} #> ")
+        self.nickname_label = tk.Label(self.input_frame, font=("Monospace", 9, "bold"), text=f" $ {self.irc_client.nickname} #> ")
         self.nickname_label.pack(side=tk.LEFT)
 
         self.input_entry = tk.Entry(self.input_frame)
@@ -752,6 +757,7 @@ class IRCClientGUI:
                 self.update_message_text(f'/whois to whois a specific user\r\n')
                 self.update_message_text(f'    -Example: /whois nickname\r\n')
                 self.update_message_text(f'/ch to list joined channels\r\n')
+                self.update_message_text(f'/sa to send a message to all channels youre in\r\n')
                 self.update_message_text(f'/sw <channel> to switch to given channel\r\n')
                 self.update_message_text(f'    -You can also click channels to switch\r\n')
                 self.update_message_text(f'/messages to display any saved channel messages\r\n')
@@ -767,9 +773,10 @@ class IRCClientGUI:
                 self.update_message_text(f'Exit button will also send /quit and close client\r\n')
             case "me":
                 action_content = user_input.split(' ', 1)[1]
+                current_time = datetime.datetime.now().strftime('%H:%M:%S')
                 action_message = f'\x01ACTION {action_content}\x01'
                 self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{action_message}')
-                self.update_message_text(f'* {self.irc_client.nickname} {action_content}\r\n')
+                self.update_message_text(f'[{current_time}] * {self.irc_client.nickname} {action_content}\r\n')
             case "users":
                 self.irc_client.sync_user_list()
             case "nick":
@@ -810,6 +817,11 @@ class IRCClientGUI:
                     self.update_message_text(f"You've unignored {user_to_unignore}.\r\n")
                 else:
                     self.update_message_text(f"{user_to_unignore} is not in your ignore list.\r\n")
+            case "sa":
+                message = ' '.join(user_input.split()[1:])
+                for channel in self.irc_client.joined_channels:
+                    self.irc_client.send_message(f'PRIVMSG {channel} :{message}')
+                self.update_message_text(f'Message sent to all joined channels: {message}\r\n')
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
 
@@ -912,7 +924,7 @@ class IRCClientGUI:
         else:
             self.root.title("Rude GUI")
 
-        self.nickname_label.config(text=f"{channel_name} $ {nickname} $> ")
+        self.nickname_label.config(font=("Monospace", 9, "bold"), text=f"{channel_name} $ {nickname} $> ")
 
     def update_message_text(self, text):
         def _update_message_text():
@@ -944,7 +956,7 @@ class IRCClientGUI:
                     break
 
             # apply orangered color to main user's name
-            self.message_text.tag_configure("main_user_color", foreground="#FF4500")
+            self.message_text.tag_configure("main_user_color", foreground="#00ff62")
             start_idx = "1.0"
             main_user_name = self.irc_client.nickname
             while True:
@@ -961,7 +973,7 @@ class IRCClientGUI:
         channel = self.irc_client.current_channel
         if channel in self.irc_client.channel_messages:
             messages = self.irc_client.channel_messages[channel]
-            text = f'                                 *******Messages in channel {channel}:\n'
+            text = f'                                              *******Messages in channel {channel}:\n'
             for timestamp, sender, message in messages:
                 if message.startswith(f'PRIVMSG {channel} :'):
                     message = message[len(f'PRIVMSG {channel} :'):]
@@ -1019,25 +1031,26 @@ class ConfigWindow(tk.Toplevel):
     def __init__(self, current_config):
         super().__init__()
         self.title("Configuration")
-        self.geometry("400x250")
+        self.geometry("500x260")
+        self.config_font = tkFont.Font(family="Monospace", size=9)
 
         # Labels
-        label_name = tk.Label(self, text="Nickname:")
+        label_name = tk.Label(self, text="Nickname:", font=self.config_font)
         label_name.grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
 
-        label_server = tk.Label(self, text="Server Address:")
+        label_server = tk.Label(self, text="Server Address:", font=self.config_font)
         label_server.grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
 
-        label_channels = tk.Label(self, text="Auto-join Channels (comma-separated):")
+        label_channels = tk.Label(self, text="Auto-join Channels (comma-separated):", font=self.config_font)
         label_channels.grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
 
-        label_password = tk.Label(self, text="Password:")
+        label_password = tk.Label(self, text="Password:", font=self.config_font)
         label_password.grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
 
-        label_port = tk.Label(self, text="Port:")
+        label_port = tk.Label(self, text="Port:", font=self.config_font)
         label_port.grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
 
-        label_ssl = tk.Label(self, text="SSL Enabled:")
+        label_ssl = tk.Label(self, text="SSL Enabled:", font=self.config_font)
         label_ssl.grid(row=5, column=0, padx=5, pady=5, sticky=tk.W)
 
         # Entry fields
@@ -1067,7 +1080,7 @@ class ConfigWindow(tk.Toplevel):
         # Set the current configuration values in the entry fields
         self.entry_name.insert(0, current_config["nickname"])
         self.entry_server.insert(0, current_config["server"])
-        self.entry_channels.insert(0, ", ".join(current_config["auto_join_channels"]))
+        self.entry_channels.insert(0, ",".join(current_config["auto_join_channels"]))
         self.entry_password.insert(0, current_config["nickserv_password"])
         self.entry_port.insert(0, current_config["port"])
         self.entry_ssl.set(current_config["ssl_enabled"])
