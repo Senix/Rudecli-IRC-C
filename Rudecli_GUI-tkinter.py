@@ -81,8 +81,12 @@ class IRCClient:
         self.receive_thread = None
         self.stay_alive_thread = None
         self.temp_user_list = {}
+        self.backup_nicknames = ["Rudie", "stixie"]
+        self.current_nick_index = 0
         self.ignore_list = []
+        self.friend_list = []
         self.load_ignore_list()
+        self.load_friend_list()
         self.user_dual_privileges = {}
         self.whois_data = {}
         self.user_list_lock = threading.Lock()
@@ -153,7 +157,7 @@ class IRCClient:
                     self.channel_messages[target_channel] = self.channel_messages[target_channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
 
                 # Log the message with the timestamp for display
-                self.log_message(self.current_channel, self.nickname, timestamped_message_for_display, is_sent=True)
+                self.log_message(self.current_channel, self.nickname, message, is_sent=True)
 
     def change_nickname(self, new_nickname):
         self.send_message(f'NICK {new_nickname}')
@@ -350,6 +354,25 @@ class IRCClient:
                         whois_response += "\n"
                         self.irc_client_gui.update_message_text(whois_response)
 
+                elif tokens.command == "433":
+                    # Handle nickname already in use
+                    if tokens.params and len(tokens.params) > 1:
+                        taken_nickname = tokens.params[1]
+                        error_message = tokens.params[2]
+                        msg = f"Error: The nickname {taken_nickname} is already in use. Reason: {error_message}"
+                        self.irc_client_gui.update_server_feedback_text(msg)
+                        
+                        # Try the next nickname in the backup list
+                        if self.current_nick_index < len(self.backup_nicknames):
+                            new_nickname = self.backup_nicknames[self.current_nick_index]
+                            self.current_nick_index += 1
+                            self.change_nickname(new_nickname)
+                            feedback = f"Attempting to use nickname: {new_nickname}"
+                            self.irc_client_gui.update_server_feedback_text(feedback)
+                        else:
+                            feedback = "All backup nicknames are exhausted. Please set a new nickname."
+                            self.irc_client_gui.update_server_feedback_text(feedback)
+
                 elif tokens.command == "PART":
                     if tokens.source is not None:
                         quit_user = tokens.hostmask.nickname
@@ -368,6 +391,8 @@ class IRCClient:
                 elif tokens.command == "JOIN":
                     if tokens.source is not None:
                         join_user = tokens.hostmask.nickname
+                        if join_user in self.friend_list:
+                            self.friend_online(join_user)
                         channel = tokens.params[0]
                         
                         with self.user_list_lock:
@@ -424,55 +449,26 @@ class IRCClient:
                 elif tokens.command == "PRIVMSG":
                     target = tokens.params[0]
                     message_content = tokens.params[1]
-                    if self.should_ignore(sender): #ignore based on hostmask
+                    self.log_message(target, sender, message_content, is_sent=False)
+                    if sender == self.nickname:
                         continue
-                    if sender in self.ignore_list: #ignore based on nick
+                    if self.should_ignore(sender):  # ignore based on hostmask
+                        continue
+                    if sender in self.ignore_list:  # ignore based on nick
                         continue
                     if self.nickname in message_content:
                         self.trigger_beep_notification()
 
                     if message_content.startswith("\x01") and message_content.endswith("\x01"):
-                        #CTCP request received
-                        ctcp_command = message_content[1:-1]
-
-                        if ctcp_command == "VERSION":
-                            #respond to VERSION request
-                            version_reply = "\x01VERSION RudeGUI-IRC-C v1.8-1\x01"
-                            self.send_message(f'PRIVMSG {sender} :{version_reply}')
-                        elif ctcp_command == "CTCP":
-                            #respond to CTCP request
-                            ctcp_response = "\x01CTCP response\x01"
-                            self.send_message(f'PRIVMSG {sender} :{ctcp_response}')
-                        elif ctcp_command == "TIME":
-                            #respond to TIME request
-                            time_reply = "\x01TIME " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\x01"
-                            self.send_message(f'PRIVMSG {sender} :{time_reply}')
-                        elif ctcp_command == "PING":
-                            #respond to PING request
-                            ping_reply = "\x01PING" + message_content[6:] + "\x01"
-                            self.send_message(f'PRIVMSG {sender} :{ping_reply}')
-                        else:
-                            if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
-                                action_content = message_content[8:-1]
-                                action_message = f' * {sender} {action_content}'
-                                if target not in self.channel_messages:
-                                    self.channel_messages[target] = []
-                                self.channel_messages[target].append((timestamp, sender, action_message))
-                                if target == self.current_channel:
-                                    received_messages += f'{timestamp} {action_message}\n'
-                                else:
-                                    self.notify_channel_activity(target)
-                                self.log_message(target, sender, action_message, is_sent=False)
+                        received_message = self.handle_ctcp_request(sender, message_content)
+                        if received_message:
+                            if target not in self.channel_messages:
+                                self.channel_messages[target] = []
+                            self.channel_messages[target].append((timestamp, sender, received_message))
+                            if target == self.current_channel:
+                                received_messages += f'{timestamp} {received_message}\n'
                             else:
-                                if target not in self.channel_messages:
-                                    self.channel_messages[target] = []
-                                self.channel_messages[target].append((timestamp, sender, message_content))
-                                if target == self.current_channel:
-                                    received_messages += f'{timestamp} <{sender}> {message_content}\n'
-                                else:
-                                    self.notify_channel_activity(target)
-
-                        self.log_message(target, sender, message_content, is_sent=False)
+                                self.notify_channel_activity(target)
 
                     else:
                         if target not in self.channel_messages:
@@ -500,6 +496,58 @@ class IRCClient:
             if received_messages:
                 self.message_queue.put(received_messages)
                 self.irc_client_gui.update_message_text(received_messages)
+
+    def handle_ctcp_request(self, sender, message_content):
+        #split the CTCP message content at the first space to separate the command from any data
+        ctcp_parts = message_content[1:-1].split(" ", 1)
+        ctcp_command = ctcp_parts[0]
+
+        if ctcp_command == "VERSION":
+             # respond to VERSION request
+             version_reply = "\x01VERSION IRishC 1.9\x01"
+             self.send_message(f'PRIVMSG {sender} :{version_reply}')
+        elif ctcp_command == "CTCP":
+            # respond to CTCP request
+            ctcp_response = "\x01CTCP response\x01"
+            self.send_message(f'PRIVMSG {sender} :{ctcp_response}')
+        elif ctcp_command == "TIME":
+            # respond to TIME request
+            time_reply = "\x01TIME " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\x01"
+            self.send_message(f'PRIVMSG {sender} :{time_reply}')
+        elif ctcp_command == "PING":
+            if len(ctcp_parts) > 1:
+                ping_data = ctcp_parts[1]
+                ping_reply = "\x01PING " + ping_data + "\x01"
+                print("Received CTCP PING request:", message_content)
+                print("Sending CTCP PING reply:", ping_reply)
+                self.send_message(f'PRIVMSG {sender} :{ping_reply}')
+            else:
+                print("Received PING CTCP request without timestamp/data.")
+        elif ctcp_command == "FINGER":
+            # respond to FINGER request (customize as per requirement)
+            version_data = "IRishC v1.9"
+            finger_reply = f"\x01FINGER User: {self.nickname}, {self.server}, {version_data}\x01"
+            self.send_message(f'PRIVMSG {sender} :{finger_reply}')
+        elif ctcp_command == "CLIENTINFO":
+            # respond with supported CTCP commands
+            client_info_reply = "\x01CLIENTINFO VERSION CTCP TIME PING FINGER SOUND\x01"
+            self.send_message(f'PRIVMSG {sender} :{client_info_reply}')
+        elif ctcp_command == "SOUND":
+            # SOUND CTCP can include a file or description of the sound. This is just for logging.
+            sound_data = ctcp_parts[1] if len(ctcp_parts) > 1 else "Unknown sound"
+            print(f"Received SOUND CTCP: BEEP!")
+            self.trigger_beep_notification()
+        else:
+            if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
+                action_content = message_content[8:-1]
+                action_message = f' * {sender} {action_content}'
+                self.log_message(self.current_channel, sender, action_message, is_sent=False)
+                return action_message
+            else:
+                self.log_message(self.current_channel, sender, message_content, is_sent=False)
+                return f'<{sender}> {message_content}'
+
+        return None  #no standard message to display
 
     def handle_mode_changes(self, channel, mode, user):
         if mode == "+o":
@@ -560,17 +608,34 @@ class IRCClient:
         except Exception as e:
             print(f"Beep notification error: {e}")
 
+    def sanitize_channel_name(self, channel):
+        #gotta remove any characters that are not alphanumeric or allowed special characters
+        return re.sub(r'[^\w\-\[\]{}^`|]', '_', channel)
+
     def log_message(self, channel, sender, message, is_sent=False):
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         if is_sent:
             log_line = f'[{timestamp}] <{self.nickname}> {message}'
         else:
             log_line = f'[{timestamp}] <{sender}> {message}'
-        directory = f'irc_log_{channel}'
-        os.makedirs(directory, exist_ok=True)
-        filename = f'{directory}/irc_log_{channel.replace("/", "_")}.txt'
+
+        # Create a folder named "Logs" to store the logs
+        logs_directory = 'Logs'
+        os.makedirs(logs_directory, exist_ok=True)
+
+        filename = f'{logs_directory}/irc_log_{self.sanitize_channel_name(channel)}.txt'
         with open(filename, 'a') as file:
             file.write(log_line + '\n')
+
+    def save_friend_list(self):
+        with open("friend_list.txt", "w") as f:
+            for user in self.friend_list:
+                f.write(f"{user}\n")
+
+    def load_friend_list(self):
+        if os.path.exists("friend_list.txt"):
+            with open("friend_list.txt", "r") as f:
+                self.friend_list = [line.strip() for line in f.readlines()]
 
     def save_ignore_list(self): #ignore them
         with open("ignore_list.txt", "w") as f:
@@ -596,6 +661,9 @@ class IRCClient:
 
     def notify_channel_activity(self, channel):
         self.irc_client_gui.update_server_feedback_text(f'Activity in channel {channel}!\r')
+
+    def friend_online(self, username):
+        self.irc_client_gui.update_message_text(f"{username} is Online!\r\n")
 
     def whois(self, target):
         self.send_message(f'WHOIS {target}')
@@ -623,6 +691,8 @@ class IRCClientGUI:
         self.irc_client = irc_client
         self.exit_event = irc_client.exit_event
 
+        self.current_config = self.load_config()
+
         self.root = tk.Tk()
         self.root.title("RudeGUI-IRC-C")
         self.root.geometry("1200x600")
@@ -635,9 +705,11 @@ class IRCClientGUI:
         self.menu_bar.add_cascade(label="Settings", menu=self.settings_menu)
         self.settings_menu.add_command(label="Configure", command=self.open_config_window)
 
-        self.chat_font = tkFont.Font(family="Liberation Mono", size=10)
-        self.channel_user_list_font = tkFont.Font(family="Monospace", size=10)
-        self.server_font = tkFont.Font(family="Monospace", size=10)
+        default_font = self.current_config.get("font_family", "Liberation Mono")
+        default_size = int(self.current_config.get("font_size", 10))
+        self.chat_font = tkFont.Font(family=default_font, size=default_size)
+        self.channel_user_list_font = tkFont.Font(family="DejaVu Sans Mono", size=9)
+        self.server_font = tkFont.Font(family="DejaVu Sans Mono", size=9)
 
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
@@ -663,7 +735,7 @@ class IRCClientGUI:
         self.input_frame = tk.Frame(self.root)
         self.input_frame.grid(row=2, column=0, sticky="ew", padx=1, pady=1)
 
-        self.nickname_label = tk.Label(self.input_frame, font=("Monospace", 9, "bold"), text=f" $ {self.irc_client.nickname} #> ")
+        self.nickname_label = tk.Label(self.input_frame, font=("Hack", 9, "italic"), text=f" $ {self.irc_client.nickname} #> ")
         self.nickname_label.pack(side=tk.LEFT)
 
         self.input_entry = tk.Entry(self.input_frame)
@@ -688,16 +760,13 @@ class IRCClientGUI:
         self.init_input_menu()
 
     def open_config_window(self):
-        current_config = {
-            "nickname": self.irc_client.nickname,
-            "server": self.irc_client.server,
-            "auto_join_channels": self.irc_client.auto_join_channels,
-            "nickserv_password": self.irc_client.nickserv_password,
-            "port": self.irc_client.port,
-            "ssl_enabled": self.irc_client.ssl_enabled,
-        }
-        config_window = ConfigWindow(current_config)
+        config_window = ConfigWindow(self.current_config)
         config_window.mainloop()
+
+    def load_config(self):
+        config = configparser.ConfigParser()
+        config.read("conf.rude") 
+        return dict(config["IRC"])  #convert config to a dictionary
 
     def switch_channel(self, event):
         # get the selected channel from the clicked position
@@ -744,8 +813,6 @@ class IRCClientGUI:
             case "part":
                 channel_name = user_input.split()[1]
                 self.irc_client.leave_channel(channel_name)
-            case "ch":
-                self.update_message_text(self.irc_client.joined_channels)
             case "sw":
                 channel_name = user_input.split()[1]
                 self.irc_client.current_channel = channel_name
@@ -756,11 +823,11 @@ class IRCClientGUI:
                 self.update_message_text(f'/part to leave a channel\r\n')
                 self.update_message_text(f'/whois to whois a specific user\r\n')
                 self.update_message_text(f'    -Example: /whois nickname\r\n')
-                self.update_message_text(f'/ch to list joined channels\r\n')
+                self.update_message_text(f'/friend adds a user to your friend list\r\n')
+                self.update_message_text(f'/unfriend removes a user from your friend list\r\n')
                 self.update_message_text(f'/sa to send a message to all channels youre in\r\n')
                 self.update_message_text(f'/sw <channel> to switch to given channel\r\n')
                 self.update_message_text(f'    -You can also click channels to switch\r\n')
-                self.update_message_text(f'/messages to display any saved channel messages\r\n')
                 self.update_message_text(f'Tab to complete nick names\r\n')
                 self.update_message_text(f'/msg to send a direct message\r\n')
                 self.update_message_text(f'    -Example: /msg NickServ IDENTIFY\r\n')
@@ -822,6 +889,22 @@ class IRCClientGUI:
                 for channel in self.irc_client.joined_channels:
                     self.irc_client.send_message(f'PRIVMSG {channel} :{message}')
                 self.update_message_text(f'Message sent to all joined channels: {message}\r\n')
+            case "friend":
+                friend_name = user_input.split()[1]
+                if friend_name not in self.irc_client.friend_list:
+                    self.irc_client.friend_list.append(friend_name)
+                    self.irc_client.save_friend_list()
+                    self.update_message_text(f"{friend_name} added to friends.\r\n")
+                else:
+                    self.update_message_text(f"{friend_name} is already in your friend list.\r\n")
+            case "unfriend":
+                unfriend_name = user_input.split()[1]
+                if unfriend_name in self.irc_client.friend_list:
+                    self.irc_client.friend_list.remove(unfriend_name)
+                    self.irc_client.save_friend_list()
+                    self.update_message_text(f"{unfriend_name} removed from friends.\r\n")
+                else:
+                    self.update_message_text(f"{unfriend_name} is not in your friend list.\r\n")
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
 
@@ -865,6 +948,7 @@ class IRCClientGUI:
 
     def handle_exit(self):
         self.irc_client.save_ignore_list()
+        self.irc_client.save_friend_list()
         self.irc_client.send_message('QUIT')
         self.irc_client.exit_event.set()  
         self.irc_client.irc.shutdown(socket.SHUT_RDWR)
@@ -920,11 +1004,11 @@ class IRCClientGUI:
         if channel_name:
             title_parts.append(channel_name)
         if title_parts:
-            self.root.title("Rude GUI" + " | ".join(title_parts))
+            self.root.title("Rude GUI " + " | ".join(title_parts))
         else:
-            self.root.title("Rude GUI")
+            self.root.title("Rude GUI ")
 
-        self.nickname_label.config(font=("Monospace", 9, "bold"), text=f"{channel_name} $ {nickname} $> ")
+        self.nickname_label.config(font=("Hack", 9, "italic"), text=f"{channel_name} $ {nickname} $> ")
 
     def update_message_text(self, text):
         def _update_message_text():
@@ -1031,8 +1115,8 @@ class ConfigWindow(tk.Toplevel):
     def __init__(self, current_config):
         super().__init__()
         self.title("Configuration")
-        self.geometry("500x260")
-        self.config_font = tkFont.Font(family="Monospace", size=9)
+        self.geometry("500x300")
+        self.config_font = tkFont.Font(family="Hack", size=10)
 
         # Labels
         label_name = tk.Label(self, text="Nickname:", font=self.config_font)
@@ -1073,17 +1157,45 @@ class ConfigWindow(tk.Toplevel):
         self.checkbox_ssl = tk.Checkbutton(self, variable=self.entry_ssl)
         self.checkbox_ssl.grid(row=5, column=1, padx=5, pady=5)
 
+        # Font Selection
+        label_font = tk.Label(self, text="Font:", font=self.config_font)
+        label_font.grid(row=6, column=0, padx=5, pady=5, sticky=tk.W)
+
+        self.font_var = tk.StringVar(self)
+        self.font_var.set(self.config_font.actual()['family'])  #set the default font based on current font
+        fonts = ["Monospace", "Consolas", "Liberation Mono", "DejaVu Sans Mono", "Hack"]
+        font_dropdown = tk.OptionMenu(self, self.font_var, *fonts, command=self.update_font)
+        font_dropdown.grid(row=6, column=1, padx=5, pady=5)
+
+        # Font Size Selection
+        label_font_size = tk.Label(self, text="Font Size:", font=self.config_font)
+        label_font_size.grid(row=7, column=0, padx=5, pady=5, sticky=tk.W)
+
+        self.font_size_var = tk.StringVar(self)
+        default_size = str(current_config.get("font_size", 10))  # Default to 10 if not in config
+        self.font_size_var.set(default_size)
+        font_sizes = [str(i) for i in range(8, 21)]  # List of font sizes from 8 to 20
+        font_size_dropdown = tk.OptionMenu(self, self.font_size_var, *font_sizes)
+        font_size_dropdown.grid(row=7, column=1, padx=5, pady=5)
+
         # Save Button
         save_button = tk.Button(self, text="Save Configuration", command=self.save_config)
-        save_button.grid(row=6, column=0, columnspan=2, padx=5, pady=5)
+        save_button.grid(row=8, column=0, columnspan=2, padx=5, pady=5)
 
         # Set the current configuration values in the entry fields
         self.entry_name.insert(0, current_config["nickname"])
         self.entry_server.insert(0, current_config["server"])
-        self.entry_channels.insert(0, ",".join(current_config["auto_join_channels"]))
+        self.entry_channels.insert(0, (current_config["auto_join_channels"]))
         self.entry_password.insert(0, current_config["nickserv_password"])
         self.entry_port.insert(0, current_config["port"])
         self.entry_ssl.set(current_config["ssl_enabled"])
+
+    def update_font(self, font_choice):
+        """Updates the font when the user selects a new font from the dropdown."""
+        self.config_font.config(family=font_choice)
+        for widget in self.winfo_children():
+            if isinstance(widget, tk.Label):
+                widget.config(font=self.config_font)
 
     def save_config(self):
         user_nick = self.entry_name.get()
@@ -1104,6 +1216,8 @@ class ConfigWindow(tk.Toplevel):
             "nickserv_password": password,
             "port": port,
             "ssl_enabled": ssl_enabled,
+            "font_family": self.font_var.get(),
+            "font_size": self.font_size_var.get()
         }
 
         # Write the updated configuration to the conf.rude file
