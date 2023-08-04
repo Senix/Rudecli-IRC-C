@@ -6,7 +6,7 @@ Config Example:
                 [IRC]
                 nickname = Rudie
                 server = irc.libera.chat
-                auto_join_channels = Rudie,#irish (When auto-joining channels have a pseudo channel set as your own nick, this way you can receive DMs, but DM support is limited at this time.)
+                auto_join_channels = Rudie,#irish 
                 nickserv_password = password
                 port = 6697
                 ssl_enabled = True
@@ -17,3 +17,4 @@ Config Example:
                 to use ssl or not you can designate by port: no ssl: 6667 yes ssl: 6697
                 ssl_enabled = False needs port 6667
                 ssl_enabled = True needs port 6697(usually)
+(When auto-joining channels have a pseudo channel set as your own nick, this way you can receive DMs, but DM support is limited at this time.)
