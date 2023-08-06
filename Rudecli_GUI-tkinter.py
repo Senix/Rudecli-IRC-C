@@ -1095,7 +1095,7 @@ class IRCClientGUI:
 
     def update_server_feedback_text(self, message):
         message = message.replace('\r', '')
-        formatted_message, bold_ranges, italic_ranges, bold_italic_ranges = self.format_message_for_display(message)  # Process the message for bold text
+        formatted_message, bold_ranges, italic_ranges, bold_italic_ranges = self.format_message_for_display(message)
 
         # Insert the message into the Text widget
         self.server_feedback_text.config(state=tk.NORMAL)
@@ -1103,12 +1103,29 @@ class IRCClientGUI:
         self.server_feedback_text.insert(tk.END, formatted_message + "\n", "server_feedback")
         self.server_feedback_text.config(state=tk.DISABLED)
 
-        # Apply bold formatting to the specified ranges
+        # Define tags for bold, italic, and bold-italic
+        self.server_feedback_text.tag_configure("bold", font=("TkDefaultFont", 10, "bold"))
+        self.server_feedback_text.tag_configure("italic", font=("TkDefaultFont", 10, "italic"))
+        self.server_feedback_text.tag_configure("bold_italic", font=("TkDefaultFont", 10, "bold italic"))
+
+        # Apply bold formatting
         for start, end in bold_ranges:
             start_bold_index = f"{start_index}+{start}c"
             end_bold_index = f"{start_index}+{end}c"
             self.server_feedback_text.tag_add("bold", start_bold_index, end_bold_index)
-            
+
+        # Apply italic formatting
+        for start, end in italic_ranges:
+            start_italic_index = f"{start_index}+{start}c"
+            end_italic_index = f"{start_index}+{end}c"
+            self.server_feedback_text.tag_add("italic", start_italic_index, end_italic_index)
+
+        # Apply bold-italic formatting
+        for start, end in bold_italic_ranges:
+            start_bold_italic_index = f"{start_index}+{start}c"
+            end_bold_italic_index = f"{start_index}+{end}c"
+            self.server_feedback_text.tag_add("bold_italic", start_bold_italic_index, end_bold_italic_index)
+
         # Ensure the message is visible in the widget
         self.server_feedback_text.see(tk.END)
         self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff")  # Make the server output blue
