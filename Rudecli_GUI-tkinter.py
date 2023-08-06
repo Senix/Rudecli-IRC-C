@@ -485,7 +485,6 @@ class IRCClient:
                                 self.channel_messages[channel] = self.channel_messages[channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
                         
                         # Display the nick change message in the chat window
-                        # Assuming there's a method to display messages in the chat
                         self.irc_client_gui.display_message_in_chat(nick_change_message_content)
 
                         self.irc_client_gui.update_server_feedback_text(raw_message)
