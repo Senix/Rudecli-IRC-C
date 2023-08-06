@@ -335,7 +335,7 @@ class IRCClient:
                             if channel in self.temp_user_list:
                                 self.user_list[channel] = self.temp_user_list[channel]
                                 del self.temp_user_list[channel]
-                                self.irc_client_gui.update_user_list(channel)
+                                self.irc_client_gui.update_joined_channels_list(channel)
 
                     elif tokens.command == "311":
                         # Handle WHOIS reply for user info
@@ -511,7 +511,7 @@ class IRCClient:
                             self.trigger_beep_notification()
                             if target not in self.irc_client_gui.channels_with_mentions:
                                 self.irc_client_gui.channels_with_mentions.append(target)
-                                self.irc_client_gui.update_joined_channels_list()
+                                self.irc_client_gui.update_joined_channels_list(channel)
 
                         if message_content.startswith("\x01") and message_content.endswith("\x01"):
                             received_message = self.handle_ctcp_request(sender, message_content)
@@ -784,6 +784,9 @@ class IRCClientGUI:
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
         current_font = self.server_feedback_text.cget("font")
         self.server_feedback_text.tag_configure("bold", font=(current_font, 10, "bold"))  # Configure the bold tag 
+        self.server_feedback_text.tag_configure("bold", font=(current_font, 10, "bold"))
+        self.server_feedback_text.tag_configure("italic", font=(current_font, 10, "italic"))
+        self.server_feedback_text.tag_configure("bold_italic", font=(current_font, 10, "bold italic"))
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
         self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff")  # Configure tags
 
@@ -1103,11 +1106,6 @@ class IRCClientGUI:
         self.server_feedback_text.insert(tk.END, formatted_message + "\n", "server_feedback")
         self.server_feedback_text.config(state=tk.DISABLED)
 
-        # Define tags for bold, italic, and bold-italic
-        self.server_feedback_text.tag_configure("bold", font=("TkDefaultFont", 10, "bold"))
-        self.server_feedback_text.tag_configure("italic", font=("TkDefaultFont", 10, "italic"))
-        self.server_feedback_text.tag_configure("bold_italic", font=("TkDefaultFont", 10, "bold italic"))
-
         # Apply bold formatting
         for start, end in bold_ranges:
             start_bold_index = f"{start_index}+{start}c"
@@ -1154,13 +1152,7 @@ class IRCClientGUI:
             self.user_list_text.tag_add("selected", "1.0", "1.end")
             self.update_window_title(self.irc_client.nickname, channel)
 
-        joined_channels_text = "\n".join(self.irc_client.joined_channels)
-        self.joined_channels_text.config(state=tk.NORMAL)
-        self.joined_channels_text.delete(1.0, tk.END)
-        self.joined_channels_text.insert(tk.END, joined_channels_text)
-        self.joined_channels_text.config(state=tk.DISABLED)
-
-    def update_joined_channels_list(self):
+    def update_joined_channels_list(self, channel):
         # Create a new tag for highlighting channels where your nickname is mentioned
         self.joined_channels_text.tag_config("mentioned", background="red")
         
