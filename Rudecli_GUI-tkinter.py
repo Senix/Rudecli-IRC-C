@@ -176,6 +176,14 @@ class IRCClient:
             # Log the message with the timestamp for display
             self.log_message(self.current_channel, self.nickname, message, is_sent=True)
 
+    def send_ctcp_request(self, target, command, parameter=None):
+        """Send a CTCP request to the specified target (user or channel)."""
+        message = f'\x01{command}'
+        if parameter:
+            message += f' {parameter}'
+        message += '\x01'
+        self.send_message(f'PRIVMSG {target} :{message}')
+
     def change_nickname(self, new_nickname):
         self.send_message(f'NICK {new_nickname}')
         self.nickname = new_nickname
@@ -796,16 +804,16 @@ class IRCClientGUI:
         self.user_list_frame = tk.Frame(self.root, width=100, height=400, bg="black")
         self.user_list_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=1, pady=1)
 
-        self.user_list_label = tk.Label(self.user_list_frame, text="User List:", bg="black", fg="#c1b1e5")
+        self.user_list_label = tk.Label(self.user_list_frame, text="Users:", bg="black", fg="#39ff14")
         self.user_list_label.pack()
 
-        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#c1b1e5", cursor="arrow", font=self.channel_user_list_font)
+        self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#39ff14", cursor="arrow", font=self.channel_user_list_font)
         self.user_list_text.pack(fill=tk.BOTH, expand=True)
 
         self.joined_channels_label = tk.Label(self.user_list_frame, text="Channels:", bg="black", fg="#00bfff")
         self.joined_channels_label.pack()
 
-        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#FDFEFF", cursor="arrow", font=self.channel_user_list_font)
+        self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#ffffff", cursor="arrow", font=self.channel_user_list_font)
         self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
 
         self.input_frame = tk.Frame(self.root)
@@ -952,6 +960,8 @@ class IRCClientGUI:
                 self.update_message_text(f'/unignore & /ignore to unignore/ignore a specific user\r\n')
                 self.update_message_text(f'    -Example: /ignore nickname & /unignore nickname\r\n')
                 self.update_message_text(f'/clear to clear the chat window\r\n')
+                self.update_message_text(f'/CTCP Usage: /CTCP <nickname> <command> [parameters]\r\n')
+                self.update_message_text(f'    -Example: /CTCP Rudie CLIENTINFO\r\n')
                 self.update_message_text(f'/rat to rat ~~,=,^>\r\n')
                 self.update_message_text(f'Exit button will also send /quit and close client\r\n')
                 self.input_entry.delete(0, tk.END)
@@ -1027,6 +1037,15 @@ class IRCClientGUI:
                     self.update_message_text(f"{unfriend_name} removed from friends.\r\n")
                 else:
                     self.update_message_text(f"{unfriend_name} is not in your friend list.\r\n")
+                self.input_entry.delete(0, tk.END)
+            case "CTCP":
+                if len(args) < 3:
+                    self.update_message_text("Invalid usage. Usage: /CTCP <nickname> <command> [parameters]\r\n")
+                    return
+                target = args[1]
+                ctcp_command = args[2].upper()
+                parameter = ' '.join(args[3:]) if len(args) > 3 else None
+                self.irc_client.send_ctcp_request(target, ctcp_command, parameter)
                 self.input_entry.delete(0, tk.END)
             case "rat": #rat
                 self.input_entry.delete(0, tk.END)
@@ -1349,7 +1368,7 @@ class IRCClientGUI:
         self.input_menu.add_command(label="Select All", command=self.select_all_text)
 
         self.input_entry.bind("<Button-3>", self.show_input_menu)
-        self.joined_channels_text.tag_configure("selected", background="#43c332")
+        self.joined_channels_text.tag_configure("selected", background="#2375b3")
         #self.user_list_text.tag_configure("selected", background="#444444")
 
     def show_input_menu(self, event):
