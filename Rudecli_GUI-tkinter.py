@@ -592,7 +592,12 @@ class IRCClient:
                             if sender not in self.dm_messages:
                                 self.dm_messages[sender] = []
                             self.dm_messages[sender].append(received_dm)
-                            self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
+
+                            # Check if this DM is already in the channels_with_activity list
+                            dm_name = f"DM: {sender}"
+                            if dm_name not in self.irc_client_gui.channels_with_activity:
+                                self.irc_client_gui.channels_with_activity.append(dm_name)
+                                self.irc_client_gui.update_joined_channels_list(channel)
                         else:
                             # This is a channel message
                             self.log_message(target, sender, message_content, is_sent=False)
@@ -992,6 +997,7 @@ class IRCClientGUI:
                 self.display_dm_messages(user)  # Display DMs with this user
                 self.update_window_title(self.irc_client.nickname, f"DM with {user}")
                 self.irc_client.current_channel = user  # Since it's a DM, not a channel
+                self.joined_channels_text.tag_remove("dm", f"{line_num}.0", f"{line_num}.end")
 
         elif selection in self.irc_client.joined_channels:  # If it's a channel
             self.irc_client.current_channel = selection
@@ -1342,8 +1348,6 @@ class IRCClientGUI:
 
         # Iterate through the lines in the joined_channels_text widget
         for idx, line in enumerate(self.joined_channels_text.get("1.0", tk.END).splitlines()):
-            if line.startswith("DM: "):  # Check for DM entries
-                self.joined_channels_text.tag_add("dm", f"{idx + 1}.0", f"{idx + 1}.end")
             if line in self.channels_with_activity:  # apply the "activity" tag first
                 self.joined_channels_text.tag_add("activity", f"{idx + 1}.0", f"{idx + 1}.end")
             if line in self.channels_with_mentions:  # then apply the "mentioned" tag
