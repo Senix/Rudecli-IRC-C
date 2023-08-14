@@ -7,3 +7,6 @@ port = 6697
 ssl_enabled = True
 font_family = Hack
 font_size = 10
+sasl_enabled = False
+sasl_username = Rudie
+sasl_password = password
