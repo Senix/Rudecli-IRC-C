@@ -1198,8 +1198,8 @@ class IRCClientGUI:
                 self.joined_channels_text.tag_add("mentioned", f"{idx + 1}.0", f"{idx + 1}.end")
             if line == self.irc_client.current_channel:  # apply the "selected" tag if it's the current channel
                 self.joined_channels_text.tag_add("selected", f"{idx + 1}.0", f"{idx + 1}.end")
-                self.update_window_title(self.irc_client.nickname, channel)
-                    
+                self.update_window_title(self.irc_client.nickname, self.irc_client.current_channel)  # using the actual current channel
+
         self.joined_channels_text.config(state=tk.DISABLED)
 
     def handle_exit(self):
