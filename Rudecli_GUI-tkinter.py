@@ -13,6 +13,9 @@ port = 6697
 ssl_enabled = True
 font_family = Hack
 font_size = 10
+sasl_enabled = False
+sasl_username = Rudie
+sasl_password = password
 
 password can be replaced with your nicks password to auto-auth with nickserv.
 to use ssl or not you can designate by port: no ssl: 6667 yes ssl: 6697
@@ -80,6 +83,11 @@ class IRCClient:
         self.nickserv_password = config.get('IRC', 'nickserv_password')
         self.auto_join_channels = config.get('IRC', 'auto_join_channels').split(',')
 
+        # SASL configurations
+        self.sasl_enabled = config.getboolean('IRC', 'sasl_enabled', fallback=False)
+        self.sasl_username = config.get('IRC', 'sasl_username', fallback=self.nickname)
+        self.sasl_password = config.get('IRC', 'sasl_password', fallback=self.nickserv_password)
+
     def connect(self):
         """
         Connect to the IRC server
@@ -97,6 +105,9 @@ class IRCClient:
 
         self.irc.connect((self.server, self.port))
         self.irc_client_gui.update_message_text(f'Connecting to server: {self.server}:{self.port}\n')
+
+        if self.sasl_enabled:
+            self.irc.send(bytes('CAP REQ :sasl\r\n', 'UTF-8'))
 
         self.irc.send(bytes(f'NICK {self.nickname}\r\n', 'UTF-8'))
         self.irc.send(bytes(f'USER {self.nickname} 0 * :{self.nickname}\r\n', 'UTF-8'))
@@ -149,6 +160,9 @@ class IRCClient:
         return self.reconnection_thread.is_alive()
 
     def send_message(self, message):
+        """
+        Sends messages
+        """
         # Generate timestamp
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
         timestamped_message_for_display = f"{timestamp} {message}"
@@ -177,7 +191,9 @@ class IRCClient:
             self.log_message(self.current_channel, self.nickname, message, is_sent=True)
 
     def send_ctcp_request(self, target, command, parameter=None):
-        """Send a CTCP request to the specified target (user or channel)."""
+        """
+        Send a CTCP request to the specified target (user or channel).
+        """
         message = f'\x01{command}'
         if parameter:
             message += f' {parameter}'
@@ -185,11 +201,17 @@ class IRCClient:
         self.send_message(f'PRIVMSG {target} :{message}')
 
     def change_nickname(self, new_nickname):
+        """
+        Changes your nickname
+        """
         self.send_message(f'NICK {new_nickname}')
         self.nickname = new_nickname
         self.irc_client_gui.update_message_text(f'Nickname changed to: {new_nickname}\n')
 
     def join_channel(self, channel):
+        """
+        Joins a channel
+        """
         self.send_message(f'JOIN {channel}')
         self.joined_channels.append(channel)
         self.channel_messages[channel] = []
@@ -198,6 +220,9 @@ class IRCClient:
         time.sleep(1)
 
     def leave_channel(self, channel):
+        """
+        Leaves a channel
+        """
         self.send_message(f'PART {channel}')
         if channel in self.joined_channels:
             self.joined_channels.remove(channel)
@@ -209,16 +234,19 @@ class IRCClient:
             self.current_channel = ''
         self.irc_client_gui.update_joined_channels_list(channel)
 
-    def list_channels(self):
-        self.send_message('LIST')
-
     def keep_alive(self):
+        """
+        Periodically sends a PING request.
+        """
         while not self.exit_event.is_set():
             time.sleep(195)
             param = self.server
             self.send_message(f'PING {param}')
 
     def ping_server(self, target=None):
+        """
+        Like the keep alive, this is used by the command parser to send a manual PING request
+        """
         if target:
             param = target
         else:
@@ -226,6 +254,9 @@ class IRCClient:
         self.send_message(f'PING {param}')
 
     def sync_user_list(self):
+        """
+        Syncs the user list via /users
+        """
         self.user_list[self.current_channel] =[]
         self.send_message(f'NAMES {self.current_channel}')
 
@@ -239,6 +270,9 @@ class IRCClient:
         return irc_color.sub('', cleaned_text)
 
     def handle_incoming_message(self):
+        """
+        The main method which handles incoming server and chat messages. 
+        """
         remaining_data = ""
 
         while not self.exit_event.is_set():
@@ -294,6 +328,38 @@ class IRCClient:
                         #process server feedback message
                         self.server_feedback_buffer += raw_message + "\n"
                         self.irc_client_gui.update_server_feedback_text(raw_message)
+
+                    elif tokens.command == "CAP":
+                        if "ACK" in tokens.params and "sasl" in tokens.params:
+                            # Server supports SASL
+                            self.send_message("AUTHENTICATE PLAIN")
+                        elif "NAK" in tokens.params:
+                            # Server does not support SASL
+                            print("Server does not support SASL.")
+                            self.irc_client_gui.update_server_feedback_text("Error: Server does not support SASL.")
+                            # If SASL is not supported, end the capability negotiation to continue the connection process
+                            self.send_message("CAP END")
+
+                    elif tokens.command == "AUTHENTICATE" and tokens.params[0] == "+":
+                        # Server is ready to receive authentication data.
+                        import base64
+                        auth_string = f"{self.sasl_username}\0{self.sasl_username}\0{self.sasl_password}"
+                        encoded_auth = base64.b64encode(auth_string.encode()).decode()
+                        self.send_message(f"AUTHENTICATE {encoded_auth}")
+
+                    elif tokens.command == "903":
+                        # SASL authentication successful
+                        print("SASL authentication successful.")
+                        self.irc_client_gui.update_server_feedback_text("SASL authentication successful.")
+                        # End the capability negotiation after successful SASL authentication
+                        self.send_message("CAP END")
+
+                    elif tokens.command == "904":
+                        # SASL authentication failed
+                        print("SASL authentication failed!")
+                        self.irc_client_gui.update_server_feedback_text("Error: SASL authentication failed!")
+                        # End the capability negotiation even if SASL authentication failed
+                        self.send_message("CAP END")
 
                     elif tokens.command == "376" or tokens.command == "001":  # Welcome <3
                         self.irc_client_gui.update_server_feedback_text(raw_message)
@@ -668,6 +734,9 @@ class IRCClient:
         self.irc_client_gui.update_user_list(channel)
 
     def trigger_beep_notification(self):
+        """
+        You've been pinged! Plays a beep or noise on mention
+        """
         try:
             if sys.platform.startswith("linux"):
                 # Linux-specific notification sound using paplay
@@ -693,6 +762,9 @@ class IRCClient:
         return re.sub(r'[^\w\-\[\]{}^`|]', '_', channel)
 
     def log_message(self, channel, sender, message, is_sent=False):
+        """
+        Logs your chats for later use
+        """
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         if is_sent:
             log_line = f'[{timestamp}] <{self.nickname}> {message}'
@@ -708,26 +780,41 @@ class IRCClient:
             file.write(log_line + '\n')
 
     def save_friend_list(self):
+        """
+        save Friend list!
+        """
         with open("friend_list.txt", "w") as f:
             for user in self.friend_list:
                 f.write(f"{user}\n")
 
     def load_friend_list(self):
+        """
+        load Friend list!
+        """
         if os.path.exists("friend_list.txt"):
             with open("friend_list.txt", "r") as f:
                 self.friend_list = [line.strip() for line in f.readlines()]
 
-    def save_ignore_list(self): #ignore them
+    def save_ignore_list(self):
+        """
+        saves ignore list
+        """
         with open("ignore_list.txt", "w") as f:
             for user in self.ignore_list:
                 f.write(f"{user}\n")
 
     def load_ignore_list(self):
+        """
+        loads ignore list
+        """
         if os.path.exists("ignore_list.txt"):
             with open("ignore_list.txt", "r") as f:
                 self.ignore_list = [line.strip() for line in f.readlines()]
 
     def should_ignore(self, hostmask):
+        """
+        This should ignore by hostmask but it doesn't work yet.
+        """
         for pattern in self.ignore_list:
             if fnmatch.fnmatch(hostmask.lower(), pattern.lower()):
                 return True
@@ -740,12 +827,21 @@ class IRCClient:
         return nickname
 
     def notify_channel_activity(self, channel):
+        """
+        Channel Activity notification - old
+        """
         self.irc_client_gui.update_server_feedback_text(f'Activity in channel {channel}!\r')
 
     def friend_online(self, username):
+        """
+        Friend list!
+        """
         self.irc_client_gui.update_message_text(f"{username} is Online!\r\n")
 
     def whois(self, target):
+        """
+        Who is this? Sends a whois request
+        """
         self.send_message(f'WHOIS {target}')
 
     def start(self):
@@ -763,6 +859,9 @@ class IRCClient:
             self.exit_event.set()
 
     def gui_handler(self):
+        """
+        Passes messages from the logic to the GUI.
+        """
         while True:
             raw_message = self.message_queue.get()
 
@@ -889,6 +988,9 @@ class IRCClientGUI:
         self.message_text.config(state=tk.DISABLED)
 
     def handle_input(self, event):
+        """
+        This handles the user input, passes to command parser if needed.
+        """
         user_input = self.input_entry.get().strip()
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
         if user_input[0] == "/":
@@ -899,6 +1001,9 @@ class IRCClientGUI:
             self.input_entry.delete(0, tk.END)
 
     def _command_parser(self, user_input:str, command: str):
+        """
+        It's the command parser, thanks cow!
+        """
         args = user_input[1:].split()
         primary_command = args[0]
         match command:
@@ -1124,6 +1229,9 @@ class IRCClientGUI:
 
 
     def update_server_feedback_text(self, message):
+        """
+        This updates the server feedback, it takes into account ascii.
+        """
         message = message.replace('\r', '')
         formatted_message, bold_ranges, italic_ranges, bold_italic_ranges = self.format_message_for_display(message)
 
@@ -1156,6 +1264,9 @@ class IRCClientGUI:
         self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff")  # Make the server output blue
 
     def update_user_list(self, channel):
+        """
+        This is responsible for updating the user list within the GUI.
+        """
         if channel in self.irc_client.user_list:
             users = self.irc_client.user_list[channel]
 
@@ -1172,6 +1283,9 @@ class IRCClientGUI:
         self.user_list_text.config(state=tk.DISABLED)
 
     def update_joined_channels_list(self, channel):
+        """
+        This handles all the fancy tags for channel notifications, mentions, etc.
+        """
         # Create tags for highlighting
         self.joined_channels_text.tag_configure("selected", background="#2375b3")
         self.joined_channels_text.tag_config("mentioned", background="red")
@@ -1203,6 +1317,9 @@ class IRCClientGUI:
         self.joined_channels_text.config(state=tk.DISABLED)
 
     def handle_exit(self):
+        """
+        Gracefully exits
+        """
         self.irc_client.save_ignore_list()
         self.irc_client.save_friend_list()
         self.irc_client.exit_event.set() 
@@ -1221,6 +1338,9 @@ class IRCClientGUI:
         self.root.destroy()
 
     def handle_tab_complete(self, event):
+        """
+        Tab complete! It's awesome.
+        """
         # get the current input in the input entry field
         user_input = self.input_entry.get()
         cursor_pos = self.input_entry.index(tk.INSERT)
@@ -1264,6 +1384,9 @@ class IRCClientGUI:
         return 'break'
 
     def update_window_title(self, nickname, channel_name):
+        """
+        This provides some fancy feedback when switching channels. 
+        """
         title_parts = []
         if nickname:
             title_parts.append(nickname)
@@ -1277,6 +1400,9 @@ class IRCClientGUI:
         self.nickname_label.config(font=("Hack", 9, "bold italic"), text=f"{channel_name} $ {nickname} $> ")
 
     def update_message_text(self, text):
+        """
+        This method is responsible for updating the message text, it adds tags for the users nick, colors the other users nicks, and chooses the color for the main text. 
+        """
         def _update_message_text():
             self.message_text.config(state=tk.NORMAL)
             
@@ -1344,6 +1470,9 @@ class IRCClientGUI:
         self.root.after(0, _update_message_text)
 
     def display_channel_messages(self):
+        """
+        This is responsible for showing the channels scrollback / history
+        """
         channel = self.irc_client.current_channel
         if channel in self.irc_client.channel_messages:
             messages = self.irc_client.channel_messages[channel]
@@ -1358,6 +1487,9 @@ class IRCClientGUI:
         self.update_user_list(channel)
 
     def display_message_in_chat(self, message):
+        """
+        Special method for showing nick changes, yellow.
+        """
         def _append_message_to_chat():
             self.message_text.config(state=tk.NORMAL)
             self.message_text.insert(tk.END, message + "\n")
@@ -1374,6 +1506,9 @@ class IRCClientGUI:
         self.root.after(0, _append_message_to_chat)
 
     def init_input_menu(self):
+        """
+        Right click menu.
+        """
         self.input_menu = Menu(self.input_entry, tearoff=0)
         self.input_menu.add_command(label="Cut", command=self.cut_text)
         self.input_menu.add_command(label="Copy", command=self.copy_text)
@@ -1405,6 +1540,9 @@ class IRCClientGUI:
         messagebox.showinfo('Channel Activity', f'There is new activity in channel {channel}!\r')
 
     def start(self):
+        """
+        It's Alive!
+        """
         self.root.mainloop()
         while not self.exit_event.is_set():
             self.root.update()
