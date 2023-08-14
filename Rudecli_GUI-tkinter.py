@@ -40,7 +40,7 @@ from tkinter.constants import *
 
 
 class IRCClient:
-    MAX_MESSAGE_HISTORY_SIZE = 500
+    MAX_MESSAGE_HISTORY_SIZE = 200
     def __init__(self):
         self.exit_event = threading.Event()
         self.joined_channels: list = []
@@ -207,6 +207,7 @@ class IRCClient:
             del self.user_list[channel]
         if self.current_channel == channel:
             self.current_channel = ''
+        self.irc_client_gui.update_joined_channels_list(channel)
 
     def list_channels(self):
         self.send_message('LIST')
@@ -494,7 +495,7 @@ class IRCClient:
                         
                         # Display the nick change message in the chat window
                         self.irc_client_gui.display_message_in_chat(nick_change_message_content)
-
+                        self.irc_client_gui.update_user_list(channel)
                         self.irc_client_gui.update_server_feedback_text(raw_message)
 
                     elif tokens.command == "MODE":
@@ -520,6 +521,9 @@ class IRCClient:
                             if target not in self.irc_client_gui.channels_with_mentions:
                                 self.irc_client_gui.channels_with_mentions.append(target)
                                 self.irc_client_gui.update_joined_channels_list(channel)
+                        if target not in self.irc_client_gui.channels_with_activity:
+                            self.irc_client_gui.channels_with_activity.append(target)
+                            self.irc_client_gui.update_joined_channels_list(channel)
 
                         if message_content.startswith("\x01") and message_content.endswith("\x01"):
                             received_message = self.handle_ctcp_request(sender, message_content)
@@ -530,7 +534,7 @@ class IRCClient:
                                 if target == self.current_channel:
                                     received_messages += f'{timestamp} {received_message}\n'
                                 else:
-                                    self.notify_channel_activity(target)
+                                    pass
 
                         else:
                             if target not in self.channel_messages:
@@ -539,7 +543,7 @@ class IRCClient:
                             if target == self.current_channel:
                                 received_messages += f'{timestamp} <{sender}> {message_content}\n'
                             else:
-                                self.notify_channel_activity(target)
+                                pass #self.notify_channel_activity(target)
 
                     else:
                         if raw_message.startswith(':'):
@@ -768,6 +772,7 @@ class IRCClientGUI:
         self.irc_client = irc_client
         self.exit_event = irc_client.exit_event
         self.channels_with_mentions = []
+        self.channels_with_activity = []
 
         self.current_config = self.load_config()
 
@@ -874,6 +879,9 @@ class IRCClientGUI:
             # Reset the color of the clicked channel by removing the "mentioned" tag
             self.joined_channels_text.tag_remove("mentioned", f"{line_num}.0", f"{line_num}.end")
             self.channels_with_mentions = []
+            # Reset the color of the clicked channel by removing the "activity" tag
+            self.joined_channels_text.tag_remove("activity", f"{line_num}.0", f"{line_num}.end")
+            self.channels_with_activity.remove(channel) if channel in self.channels_with_activity else None
 
     def clear_chat_window(self):
         self.message_text.config(state=tk.NORMAL)
@@ -1151,7 +1159,7 @@ class IRCClientGUI:
         if channel in self.irc_client.user_list:
             users = self.irc_client.user_list[channel]
 
-            #sort users based on symbols @, +, and none
+            # Sort users based on symbols @, +, and none
             users_sorted = sorted(users, key=lambda user: (not user.startswith('@'), not user.startswith('+'), user))
 
             user_list_text = "\n".join(users_sorted)
@@ -1163,30 +1171,35 @@ class IRCClientGUI:
         self.user_list_text.insert(tk.END, user_list_text)
         self.user_list_text.config(state=tk.DISABLED)
 
-        #remove the "selected" tag from the entire text widget
-        self.user_list_text.tag_remove("selected", "1.0", tk.END)
-
-        #apply the "selected" tag only to the specific channel entry
-        if self.irc_client.current_channel == channel:
-            self.user_list_text.tag_add("selected", "1.0", "1.end")
-            self.update_window_title(self.irc_client.nickname, channel)
-
     def update_joined_channels_list(self, channel):
-        # Create a new tag for highlighting channels where your nickname is mentioned
+        # Create tags for highlighting
+        self.joined_channels_text.tag_configure("selected", background="#2375b3")
         self.joined_channels_text.tag_config("mentioned", background="red")
+        self.joined_channels_text.tag_config("activity", background="green")
         
+        # Set certain tags to raise over others.
+        self.joined_channels_text.tag_raise("selected")
+        self.joined_channels_text.tag_raise("mentioned")
+
         # Update the list of joined channels
         joined_channels_text = "\n".join(self.irc_client.joined_channels)
         self.joined_channels_text.config(state=tk.NORMAL)
         self.joined_channels_text.delete(1.0, tk.END)
         self.joined_channels_text.insert(tk.END, joined_channels_text)
         
-        # Iterate through the lines in the joined_channels_text widget to find channels that had mentions
+        # Remove the "selected" tag from the entire text widget
+        self.joined_channels_text.tag_remove("selected", "1.0", tk.END)
+
+        # Iterate through the lines in the joined_channels_text widget
         for idx, line in enumerate(self.joined_channels_text.get("1.0", tk.END).splitlines()):
-            if line in self.channels_with_mentions:
-                # Apply the "mentioned" tag to the specific channel line
+            if line in self.channels_with_activity:  # apply the "activity" tag first
+                self.joined_channels_text.tag_add("activity", f"{idx + 1}.0", f"{idx + 1}.end")
+            if line in self.channels_with_mentions:  # then apply the "mentioned" tag
                 self.joined_channels_text.tag_add("mentioned", f"{idx + 1}.0", f"{idx + 1}.end")
-        
+            if line == self.irc_client.current_channel:  # apply the "selected" tag if it's the current channel
+                self.joined_channels_text.tag_add("selected", f"{idx + 1}.0", f"{idx + 1}.end")
+                self.update_window_title(self.irc_client.nickname, channel)
+                    
         self.joined_channels_text.config(state=tk.DISABLED)
 
     def handle_exit(self):
@@ -1303,7 +1316,7 @@ class IRCClientGUI:
             self.message_text.tag_add("brightgreen", "1.0", "end")
 
             # apply blue color to nicknames
-            self.message_text.tag_configure("nickname_color", foreground="#9fadfd")
+            self.message_text.tag_configure("nickname_color", foreground="#c792ea") #c792ea(I want to try this color.)
             start_idx = "1.0"
             while True:
                 start_idx = self.message_text.search('<', start_idx, stopindex=tk.END)
@@ -1368,8 +1381,6 @@ class IRCClientGUI:
         self.input_menu.add_command(label="Select All", command=self.select_all_text)
 
         self.input_entry.bind("<Button-3>", self.show_input_menu)
-        self.joined_channels_text.tag_configure("selected", background="#2375b3")
-        #self.user_list_text.tag_configure("selected", background="#444444")
 
     def show_input_menu(self, event):
         try:
