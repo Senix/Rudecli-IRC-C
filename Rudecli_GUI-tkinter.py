@@ -7,7 +7,7 @@ Config Example:
 [IRC]
 nickname = Rudie
 server = irc.libera.chat
-auto_join_channels = Rudie,#irish (When auto-joining channels have a pseudo channel set as your own nick, this way you can receive DMs, but DM support is limited at this time.)
+auto_join_channels = #irish
 nickserv_password = password
 port = 6697
 ssl_enabled = True
@@ -68,6 +68,8 @@ class IRCClient:
         self.user_list_lock = threading.Lock()
         self.has_auto_joined = False
         self.reconnection_thread = None
+        self.dm_users = []
+        self.dm_messages = {}
 
     def read_config(self, config_file):
         """
@@ -181,6 +183,13 @@ class IRCClient:
             if target_channel not in self.channel_messages:
                 self.channel_messages[target_channel] = []
             self.channel_messages[target_channel].append((timestamp, self.nickname, message_without_timestamp))
+
+            # If the target is a DM
+            if target_channel not in self.joined_channels:
+                if target_channel not in self.dm_messages:
+                    self.dm_messages[target_channel] = []
+                sent_dm = f"{timestamp} <{self.nickname}> {message_without_timestamp}\n"
+                self.dm_messages[target_channel].append(sent_dm)
 
             # Check if the message history size exceeds the maximum allowed
             if len(self.channel_messages[target_channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
@@ -575,7 +584,19 @@ class IRCClient:
                     elif tokens.command == "PRIVMSG":
                         target = tokens.params[0]
                         message_content = tokens.params[1]
-                        self.log_message(target, sender, message_content, is_sent=False)
+                        if target == self.nickname:
+                            # This is a DM
+                            if sender not in self.dm_users:
+                                self.dm_users.append(sender)
+                            received_dm = f"{timestamp} <{sender}> {message_content}\n"
+                            if sender not in self.dm_messages:
+                                self.dm_messages[sender] = []
+                            self.dm_messages[sender].append(received_dm)
+                            self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
+                        else:
+                            # This is a channel message
+                            self.log_message(target, sender, message_content, is_sent=False)
+
                         if sender == self.nickname:
                             continue
                         if self.should_ignore(sender):  # ignore based on hostmask
@@ -957,30 +978,39 @@ class IRCClientGUI:
         return dict(config["IRC"])  #convert config to a dictionary
 
     def switch_channel(self, event):
-        # get the selected channel from the clicked position
+        # get the selected channel or DM from the clicked position
         index = self.joined_channels_text.index("@%d,%d" % (event.x, event.y))
         line_num = int(index.split(".")[0])
-        channel = self.joined_channels_text.get(f"{line_num}.0", f"{line_num}.end").strip()
+        selection = self.joined_channels_text.get(f"{line_num}.0", f"{line_num}.end").strip()
 
-        if channel in self.irc_client.joined_channels:
-            self.irc_client.current_channel = channel
+        # Clear the main chat window
+        self.clear_chat_window()
 
-            # Clear the main chat window
-            self.clear_chat_window()
-            self.display_channel_messages()
-            self.update_window_title(self.irc_client.nickname, channel)
+        if selection.startswith("DM: "):  # If it's a DM
+            user = selection[4:]
+            if user in self.irc_client.dm_users:
+                self.display_dm_messages(user)  # Display DMs with this user
+                self.update_window_title(self.irc_client.nickname, f"DM with {user}")
+                self.irc_client.current_channel = user  # Since it's a DM, not a channel
 
-            # Highlight the selected channel
-            if self.selected_channel:
-                self.joined_channels_text.tag_remove("selected", 1.0, tk.END)
-            self.joined_channels_text.tag_add("selected", f"{line_num}.0", f"{line_num}.end")
-            self.selected_channel = channel
-            # Reset the color of the clicked channel by removing the "mentioned" tag
-            self.joined_channels_text.tag_remove("mentioned", f"{line_num}.0", f"{line_num}.end")
-            self.channels_with_mentions = []
-            # Reset the color of the clicked channel by removing the "activity" tag
-            self.joined_channels_text.tag_remove("activity", f"{line_num}.0", f"{line_num}.end")
-            self.channels_with_activity.remove(channel) if channel in self.channels_with_activity else None
+        elif selection in self.irc_client.joined_channels:  # If it's a channel
+            self.irc_client.current_channel = selection
+            self.display_channel_messages()  # Display messages from this channel
+            self.update_window_title(self.irc_client.nickname, selection)
+
+        # Highlight the selected channel/DM
+        if self.selected_channel:
+            self.joined_channels_text.tag_remove("selected", 1.0, tk.END)
+        self.joined_channels_text.tag_add("selected", f"{line_num}.0", f"{line_num}.end")
+        self.selected_channel = selection
+
+        # Reset the color of the clicked channel by removing the "mentioned" and "activity" tags
+        self.joined_channels_text.tag_remove("mentioned", f"{line_num}.0", f"{line_num}.end")
+        self.channels_with_mentions = []
+        self.joined_channels_text.tag_remove("activity", f"{line_num}.0", f"{line_num}.end")
+        if selection in self.channels_with_activity:
+            self.channels_with_activity.remove(selection)
+        return "break"
 
     def clear_chat_window(self):
         self.message_text.config(state=tk.NORMAL)
@@ -1227,6 +1257,10 @@ class IRCClientGUI:
 
         return formatted_message, bold_ranges, italic_ranges, bold_italic_ranges
 
+    def display_dm_messages(self, user):
+        if user in self.irc_client.dm_messages:
+            for message in self.irc_client.dm_messages[user]:
+                self.update_message_text(message)
 
     def update_server_feedback_text(self, message):
         """
@@ -1288,24 +1322,28 @@ class IRCClientGUI:
         """
         # Create tags for highlighting
         self.joined_channels_text.tag_configure("selected", background="#2375b3")
-        self.joined_channels_text.tag_config("mentioned", background="red")
-        self.joined_channels_text.tag_config("activity", background="green")
+        self.joined_channels_text.tag_configure("mentioned", background="red")
+        self.joined_channels_text.tag_configure("activity", background="green")
         
         # Set certain tags to raise over others.
         self.joined_channels_text.tag_raise("selected")
         self.joined_channels_text.tag_raise("mentioned")
 
-        # Update the list of joined channels
-        joined_channels_text = "\n".join(self.irc_client.joined_channels)
+        # Combine channels and DM users for display
+        all_items = self.irc_client.joined_channels + [f"DM: {user}" for user in self.irc_client.dm_users]
+        all_items_text = "\n".join(all_items)
+
         self.joined_channels_text.config(state=tk.NORMAL)
         self.joined_channels_text.delete(1.0, tk.END)
-        self.joined_channels_text.insert(tk.END, joined_channels_text)
-        
+        self.joined_channels_text.insert(tk.END, all_items_text)
+
         # Remove the "selected" tag from the entire text widget
         self.joined_channels_text.tag_remove("selected", "1.0", tk.END)
 
         # Iterate through the lines in the joined_channels_text widget
         for idx, line in enumerate(self.joined_channels_text.get("1.0", tk.END).splitlines()):
+            if line.startswith("DM: "):  # Check for DM entries
+                self.joined_channels_text.tag_add("dm", f"{idx + 1}.0", f"{idx + 1}.end")
             if line in self.channels_with_activity:  # apply the "activity" tag first
                 self.joined_channels_text.tag_add("activity", f"{idx + 1}.0", f"{idx + 1}.end")
             if line in self.channels_with_mentions:  # then apply the "mentioned" tag
@@ -1399,7 +1437,7 @@ class IRCClientGUI:
 
         self.nickname_label.config(font=("Hack", 9, "bold italic"), text=f"{channel_name} $ {nickname} $> ")
 
-    def update_message_text(self, text):
+    def update_message_text(self, text, sender=None, is_dm=False):
         """
         This method is responsible for updating the message text, it adds tags for the users nick, colors the other users nicks, and chooses the color for the main text. 
         """
@@ -1466,6 +1504,22 @@ class IRCClientGUI:
                 end_idx = f"{start_idx}+{len(main_user_name)}c"
                 self.message_text.tag_add("main_user_color", start_idx, end_idx)
                 start_idx = end_idx
+
+            # If it's a DM, apply the DM color and highlight the sender's name
+            if is_dm:
+                # Color the DM in a different shade, e.g., red
+                self.message_text.tag_configure("dm_color", foreground="#ff4500")
+                start_idx = f"{self.message_text.index(tk.END)}-1l linestart"
+                end_idx = self.message_text.index(tk.END)
+                self.message_text.tag_add("dm_color", start_idx, end_idx)
+
+                # Highlight the sender's name in the DM
+                if sender:
+                    start_idx = self.message_text.search(sender, start_idx, stopindex=end_idx)
+                    if start_idx:
+                        end_idx = f"{start_idx}+{len(sender)}c"
+                        self.message_text.tag_configure("dm_sender", foreground="#00ff62")
+                        self.message_text.tag_add("dm_sender", start_idx, end_idx)
 
         self.root.after(0, _update_message_text)
 
