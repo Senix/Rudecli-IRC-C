@@ -167,28 +167,28 @@ class IRCClient:
         """
         # Generate timestamp
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
-        timestamped_message_for_display = f"{timestamp} {message}"
 
-        # Define message_without_timestamp as the original message
-        message_without_timestamp = message
-
-        # Send to server, no timestamp
+        # Send to server
         self.irc.send(bytes(f'{message}\r\n', 'UTF-8'))
 
-        # Extract the target channel from the message
-        target_match = re.match(r'PRIVMSG (\S+)', message)
+        # Extract the target channel and actual message content from the message
+        target_match = re.match(r'PRIVMSG (\S+) :(.+)', message)
         if target_match:
             target_channel = target_match.group(1)
-            # Add the sent message to the channel history (with timestamp for display)
+            message_content = target_match.group(2).strip()
+
+            # Add the sent message to the channel history
             if target_channel not in self.channel_messages:
                 self.channel_messages[target_channel] = []
-            self.channel_messages[target_channel].append((timestamp, self.nickname, message_without_timestamp))
+
+            # Only store the actual content of the message, not the entire command
+            self.channel_messages[target_channel].append((timestamp, self.nickname, message_content))
 
             # If the target is a DM
             if target_channel not in self.joined_channels:
                 if target_channel not in self.dm_messages:
                     self.dm_messages[target_channel] = []
-                sent_dm = f"{timestamp} <{self.nickname}> {message_without_timestamp}\n"
+                sent_dm = f"{timestamp} <{self.nickname}> {message_content}\n"
                 self.dm_messages[target_channel].append(sent_dm)
 
             # Check if the message history size exceeds the maximum allowed
@@ -197,7 +197,7 @@ class IRCClient:
                 self.channel_messages[target_channel] = self.channel_messages[target_channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
 
             # Log the message with the timestamp for display
-            self.log_message(self.current_channel, self.nickname, message, is_sent=True)
+            self.log_message(target_channel, self.nickname, message_content, is_sent=True)
 
     def send_ctcp_request(self, target, command, parameter=None):
         """
@@ -558,16 +558,6 @@ class IRCClient:
                         new_nickname = tokens.params[0]
                         nick_change_message_content = f"{old_nickname} has changed their nickname to {new_nickname}"
                         
-                        # Append the nick change to each channel the user is in
-                        for channel in self.joined_channels:
-                            if channel not in self.channel_messages:
-                                self.channel_messages[channel] = []
-                            self.channel_messages[channel].append((timestamp, old_nickname, nick_change_message_content))
-                            
-                            # Ensure the message history doesn't exceed the maximum size
-                            if len(self.channel_messages[channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
-                                self.channel_messages[channel] = self.channel_messages[channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
-                        
                         # Display the nick change message in the chat window
                         self.irc_client_gui.display_message_in_chat(nick_change_message_content)
                         self.irc_client_gui.update_user_list(channel)
@@ -584,20 +574,30 @@ class IRCClient:
                     elif tokens.command == "PRIVMSG":
                         target = tokens.params[0]
                         message_content = tokens.params[1]
+                        
                         if target == self.nickname:
                             # This is a DM
                             if sender not in self.dm_users:
                                 self.dm_users.append(sender)
+                            
                             received_dm = f"{timestamp} <{sender}> {message_content}\n"
+                            self.log_message(f"{sender}", sender, message_content)
+                            
                             if sender not in self.dm_messages:
                                 self.dm_messages[sender] = []
+                            
                             self.dm_messages[sender].append(received_dm)
 
                             # Check if this DM is already in the channels_with_activity list
                             dm_name = f"DM: {sender}"
+                            
                             if dm_name not in self.irc_client_gui.channels_with_activity:
                                 self.irc_client_gui.channels_with_activity.append(dm_name)
                                 self.irc_client_gui.update_joined_channels_list(channel)
+                            
+                            # Only display the DM in the GUI if the currently selected channel is the DM from this sender
+                            if self.current_channel == sender:
+                                self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
                         else:
                             # This is a channel message
                             self.log_message(target, sender, message_content, is_sent=False)
@@ -928,7 +928,7 @@ class IRCClientGUI:
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
         self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff")  # Configure tags
 
-        self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ffffff", font=self.chat_font)
+        self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ffffff", cursor="arrow", font=self.chat_font)
         self.message_text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
 
         self.user_list_frame = tk.Frame(self.root, width=100, height=400, bg="black")
@@ -1509,21 +1509,23 @@ class IRCClientGUI:
                 self.message_text.tag_add("main_user_color", start_idx, end_idx)
                 start_idx = end_idx
 
-            # If it's a DM, apply the DM color and highlight the sender's name
-            if is_dm:
-                # Color the DM in a different shade, e.g., red
-                self.message_text.tag_configure("dm_color", foreground="#ff4500")
-                start_idx = f"{self.message_text.index(tk.END)}-1l linestart"
-                end_idx = self.message_text.index(tk.END)
-                self.message_text.tag_add("dm_color", start_idx, end_idx)
+            urls = self.find_urls(cleaned_formatted_text)
+            for url in urls:
+                start_idx = self.message_text.search(url, "1.0", tk.END)
+                if start_idx:
+                    end_idx = f"{start_idx}+{len(url)}c"
+                    self.message_text.tag_add("url", start_idx, end_idx)
+                    self.message_text.tag_configure("url", foreground="blue", underline=1)
+                    self.message_text.tag_bind("url", "<Button-1>", lambda e, url=url: self.open_url(url))
 
-                # Highlight the sender's name in the DM
-                if sender:
-                    start_idx = self.message_text.search(sender, start_idx, stopindex=end_idx)
-                    if start_idx:
-                        end_idx = f"{start_idx}+{len(sender)}c"
-                        self.message_text.tag_configure("dm_sender", foreground="#00ff62")
-                        self.message_text.tag_add("dm_sender", start_idx, end_idx)
+            channels = self.find_channels(cleaned_formatted_text)
+            for channel in channels:
+                start_idx = self.message_text.search(channel, "1.0", tk.END)
+                if start_idx:
+                    end_idx = f"{start_idx}+{len(channel)}c"
+                    self.message_text.tag_add("channel", start_idx, end_idx)
+                    self.message_text.tag_configure("channel", foreground="cyan", underline=1)
+                    self.message_text.tag_bind("channel", "<Button-1>", lambda e, channel=channel: self.join_channel(channel))
 
         self.root.after(0, _update_message_text)
 
@@ -1534,7 +1536,7 @@ class IRCClientGUI:
         channel = self.irc_client.current_channel
         if channel in self.irc_client.channel_messages:
             messages = self.irc_client.channel_messages[channel]
-            text = f'                                              *******Messages in channel {channel}:\n'
+            text = ''
             for timestamp, sender, message in messages:
                 if message.startswith(f'PRIVMSG {channel} :'):
                     message = message[len(f'PRIVMSG {channel} :'):]
@@ -1594,8 +1596,22 @@ class IRCClientGUI:
         self.input_entry.select_range(0, tk.END)
         self.input_entry.icursor(tk.END)
 
-    def notify_channel_activity(self, channel):
-        messagebox.showinfo('Channel Activity', f'There is new activity in channel {channel}!\r')
+    def find_urls(self, text):
+        # A simple regex to detect URLs
+        url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
+        return url_pattern.findall(text)
+
+    def open_url(self, url):
+        import webbrowser
+        webbrowser.open(url)
+
+    def find_channels(self, text):
+        # A regex to detect channel names starting with #
+        channel_pattern = re.compile(r'(?i)(##?#?\w[\w\-\/]*\w)')
+        return channel_pattern.findall(text)
+
+    def join_channel(self, channel):
+        self.irc_client.send_message(f"JOIN {channel}")
 
     def start(self):
         """
