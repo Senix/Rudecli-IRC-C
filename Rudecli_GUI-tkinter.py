@@ -1611,7 +1611,12 @@ class IRCClientGUI:
         return channel_pattern.findall(text)
 
     def join_channel(self, channel):
+        if channel not in self.irc_client.joined_channels:
+            # Add the channel to the irc_client's list of channels
+            self.irc_client.joined_channels.append(channel)
         self.irc_client.send_message(f"JOIN {channel}")
+        # Update the GUI's list of channels
+        self.update_joined_channels_list(channel)
 
     def start(self):
         """
