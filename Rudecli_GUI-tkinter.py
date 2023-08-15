@@ -37,6 +37,7 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkFont
+from plyer import notification
 from queue import Queue
 from tkinter import messagebox, scrolledtext, Menu
 from tkinter.constants import *
@@ -609,7 +610,7 @@ class IRCClient:
                         if sender in self.ignore_list:  # ignore based on nick
                             continue
                         if self.nickname in message_content:
-                            self.trigger_beep_notification()
+                            self.trigger_beep_notification(channel_name=target, title="Ping", message="You've been pinged!")
                             if target not in self.irc_client_gui.channels_with_mentions:
                                 self.irc_client_gui.channels_with_mentions.append(target)
                                 self.irc_client_gui.update_joined_channels_list(channel)
@@ -759,29 +760,41 @@ class IRCClient:
                 self.user_list[channel].append(user)
         self.irc_client_gui.update_user_list(channel)
 
-    def trigger_beep_notification(self):
+    def trigger_beep_notification(self, channel_name=None, title="Ping", message="You've been pinged!"):
         """
-        You've been pinged! Plays a beep or noise on mention
+        You've been pinged! Plays a beep or noise on mention and shows a system notification
         """
+        if channel_name:
+            # Ensure channel_name is a string and replace problematic characters
+            channel_name = str(channel_name).replace("#", "channel ")
+            title = f"{title} from {channel_name}"
+
+        if sys.platform.startswith("linux"):
+            # Linux-specific notification sound using paplay
+            sound_path = os.path.join(os.getcwd(), "Sounds", "Notification4.wav")
+            os.system(f"paplay {sound_path}")
+        elif sys.platform == "darwin":
+            # macOS-specific notification sound using afplay
+            os.system("afplay /System/Library/Sounds/Ping.aiff")
+        elif sys.platform == "win32":
+            # Windows-specific notification using winsound
+            import winsound
+            duration = 1000  # milliseconds
+            frequency = 440  # Hz
+            winsound.Beep(frequency, duration)
+        else:
+            # For other platforms, print a message
+            print("Beep notification not supported on this platform.")
+
         try:
-            if sys.platform.startswith("linux"):
-                # Linux-specific notification sound using paplay
-                sound_path = os.path.join(os.getcwd(), "Sounds", "Notification4.wav")
-                os.system(f"paplay {sound_path}")
-            elif sys.platform == "darwin":
-                # macOS-specific notification sound using afplay
-                os.system("afplay /System/Library/Sounds/Ping.aiff")
-            elif sys.platform == "win32":
-                # Windows-specific notification using winsound
-                import winsound
-                duration = 1000  # milliseconds
-                frequency = 440  # Hz
-                winsound.Beep(frequency, duration)
-            else:
-                # For other platforms, print a message
-                print("Beep notification not supported on this platform.")
+            # Desktop Notification
+            notification.notify(
+                title=title,
+                message=message,
+                timeout=10,  # seconds
+            )
         except Exception as e:
-            print(f"Beep notification error: {e}")
+            print(f"Desktop notification error: {e}")
 
     def sanitize_channel_name(self, channel):
         #gotta remove any characters that are not alphanumeric or allowed special characters
