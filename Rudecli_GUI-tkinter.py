@@ -75,7 +75,8 @@ class IRCClient:
         self.sound_ctcp_count = 0
         self.sound_ctcp_limit = 5
         self.reset_timer = None
-        self.start_reset_timer()
+        self.sound_ctcp_limit_flag = False 
+        self.reset_timer = None
 
     def read_config(self, config_file):
         """
@@ -712,14 +713,16 @@ class IRCClient:
             if self.sound_ctcp_count < self.sound_ctcp_limit:
                 # Increment the counter
                 self.sound_ctcp_count += 1
-                
+
                 # SOUND CTCP can include a file or description of the sound. This is just for logging.
                 sound_data = ctcp_parts[1] if len(ctcp_parts) > 1 else "Unknown sound"
                 print(f"Received SOUND CTCP: BEEP!")
                 self.trigger_beep_notification()
             else:
                 print("SOUND CTCP limit reached. Ignoring...")
-
+                if not self.sound_ctcp_limit_flag:  # If the flag isn't set yet
+                    self.sound_ctcp_limit_flag = True
+                    self.start_reset_timer()
         else:
             if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
                 action_content = message_content[8:-1]
@@ -733,6 +736,10 @@ class IRCClient:
         return None  # No standard message to display
 
     def start_reset_timer(self):
+        # If the flag isn't set, don't start the timer
+        if not self.sound_ctcp_limit_flag:
+            return
+
         # If a timer already exists, cancel it to avoid overlapping timers
         if self.reset_timer:
             self.reset_timer.cancel()
@@ -745,8 +752,7 @@ class IRCClient:
     def reset_counter(self):
         print("Resetting SOUND CTCP counter...")
         self.sound_ctcp_count = 0
-        # Restart the timer
-        self.start_reset_timer()
+        self.sound_ctcp_limit_flag = False
 
     def handle_mode_changes(self, channel, mode, user):
         if mode == "+o":
@@ -1543,21 +1549,21 @@ class IRCClientGUI:
             self.message_text.see(tk.END)
 
             # Apply bold formatting
-            self.message_text.tag_configure("bold", font=("Hack", 15, "bold"))
+            self.message_text.tag_configure("bold", font=("Hack", 10, "bold"))
             for start, end in bold_ranges:
                 start_idx = f"{start + 1}.0"
                 end_idx = f"{end + 1}.0"
                 self.message_text.tag_add("bold", start_idx, end_idx)
 
             # Apply italic formatting
-            self.message_text.tag_configure("italic", font=("Hack", 15, "italic"))
+            self.message_text.tag_configure("italic", font=("Hack", 10, "italic"))
             for start, end in italic_ranges:
                 start_idx = f"{start + 1}.0"
                 end_idx = f"{end + 1}.0"
                 self.message_text.tag_add("italic", start_idx, end_idx)
 
             # Apply bold-italic formatting
-            self.message_text.tag_configure("bold_italic", font=("Hack", 15, "bold italic"))
+            self.message_text.tag_configure("bold_italic", font=("Hack", 10, "bold italic"))
             for start, end in bold_italic_ranges:
                 start_idx = f"{start + 1}.0"
                 end_idx = f"{end + 1}.0"
@@ -1624,14 +1630,22 @@ class IRCClientGUI:
 
             channels = self.find_channels(cleaned_formatted_text)
             for channel in channels:
-                # Ensure we're not treating marked URLs as channels
-                if "<URL>" not in channel and "</URL>" not in channel:
-                    start_idx = self.message_text.search(channel, "1.0", tk.END)
-                    if start_idx:
-                        end_idx = f"{start_idx}+{len(channel)}c"
+                start_idx = "1.0"
+                while True:
+                    # Search for the channel from the current start index
+                    start_idx = self.message_text.search(channel, start_idx, stopindex=tk.END)
+                    if not start_idx:
+                        break
+                    end_idx = f"{start_idx}+{len(channel)}c"
+                    
+                    # Ensure we're not treating marked URLs as channels
+                    if "<URL>" not in self.message_text.get(start_idx, end_idx) and "</URL>" not in self.message_text.get(start_idx, end_idx):
                         self.message_text.tag_add("channel", start_idx, end_idx)
                         self.message_text.tag_configure("channel", foreground="cyan", underline=1)
                         self.message_text.tag_bind("channel", "<Button-1>", lambda e, channel=channel: self.join_channel(channel))
+                    
+                    # Move the start index to after the current found channel to continue the search
+                    start_idx = end_idx
 
         self.root.after(0, _update_message_text)
 
@@ -1704,7 +1718,7 @@ class IRCClientGUI:
 
     def find_urls(self, text):
         # A simple regex to detect URLs
-        url_pattern = re.compile(r'(\w+://[\w$-_@.&+#~!*\\(\\),;%]+)')
+        url_pattern = re.compile(r'(\w+://\S+|www\.\S+)')
         return url_pattern.findall(text)
 
     def open_url(self, url):
@@ -1713,7 +1727,7 @@ class IRCClientGUI:
 
     def find_channels(self, text):
         # A regex to detect channel names starting with #
-        channel_pattern = re.compile(r'(?i)(#+[^\s,]+)')
+        channel_pattern = re.compile(r'(?i)(#+[^\s,]+)(?![.:/])')
         return channel_pattern.findall(text)
 
     def join_channel(self, channel):
