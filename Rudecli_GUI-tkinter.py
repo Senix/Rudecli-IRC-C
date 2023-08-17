@@ -74,6 +74,8 @@ class IRCClient:
         self.dm_messages = {}
         self.sound_ctcp_count = 0
         self.sound_ctcp_limit = 5
+        self.reset_timer = None
+        self.start_reset_timer()
 
     def read_config(self, config_file):
         """
@@ -729,6 +731,22 @@ class IRCClient:
                 return f'<{sender}> {message_content}'
 
         return None  # No standard message to display
+
+    def start_reset_timer(self):
+        # If a timer already exists, cancel it to avoid overlapping timers
+        if self.reset_timer:
+            self.reset_timer.cancel()
+
+        # Set up the timer to call reset_counter after 15 minutes (900 seconds)
+        self.reset_timer = threading.Timer(900, self.reset_counter)
+        self.reset_timer.daemon = True
+        self.reset_timer.start()
+
+    def reset_counter(self):
+        print("Resetting SOUND CTCP counter...")
+        self.sound_ctcp_count = 0
+        # Restart the timer
+        self.start_reset_timer()
 
     def handle_mode_changes(self, channel, mode, user):
         if mode == "+o":
