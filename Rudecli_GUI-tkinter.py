@@ -29,6 +29,7 @@ import datetime
 import fnmatch
 import irctokens
 import os
+import random
 import re
 import socket
 import ssl
@@ -523,10 +524,9 @@ class IRCClient:
                     elif tokens.command == "JOIN":
                         if tokens.source is not None:
                             join_user = tokens.hostmask.nickname
+                            channel = tokens.params[0]  
                             if join_user in self.friend_list:
-                                self.friend_online(join_user)
-                            channel = tokens.params[0]
-                            
+                                self.friend_online(channel, join_user) 
                             with self.user_list_lock:
                                 if channel in self.user_list:
                                     if join_user not in self.user_list[channel]:
@@ -791,7 +791,7 @@ class IRCClient:
             notification.notify(
                 title=title,
                 message=message,
-                timeout=10,  # seconds
+                timeout=5,  # seconds
             )
         except Exception as e:
             print(f"Desktop notification error: {e}")
@@ -871,11 +871,11 @@ class IRCClient:
         """
         self.irc_client_gui.update_server_feedback_text(f'Activity in channel {channel}!\r')
 
-    def friend_online(self, username):
+    def friend_online(self, channel, username):
         """
         Friend list!
         """
-        self.irc_client_gui.update_message_text(f"{username} is Online!\r\n")
+        self.irc_client_gui.update_message_text(f"{channel}: {username} is Online!\r\n")
 
     def whois(self, target):
         """
@@ -911,6 +911,7 @@ class IRCClientGUI:
         self.exit_event = irc_client.exit_event
         self.channels_with_mentions = []
         self.channels_with_activity = []
+        self.nickname_colors = {}
 
         self.current_config = self.load_config()
 
@@ -1036,6 +1037,11 @@ class IRCClientGUI:
         self.message_text.delete(1.0, tk.END)
         self.message_text.config(state=tk.DISABLED)
 
+    def generate_random_color(self):
+        return "#{:02x}{:02x}{:02x}".format(random.randint(0, 255), 
+                                           random.randint(0, 255), 
+                                           random.randint(0, 255))
+
     def handle_input(self, event):
         """
         This handles the user input, passes to command parser if needed.
@@ -1080,7 +1086,19 @@ class IRCClientGUI:
                 channel_name = user_input.split()[1]
                 self.irc_client.leave_channel(channel_name)
                 self.input_entry.delete(0, tk.END)
-            case "msg": #send a DM
+            case "query": #open a DM with a user
+                target_user = user_input.split()[1] if len(user_input.split()) > 1 else None
+                if not target_user:
+                    self.update_message_text("Invalid usage. Usage: /query <nickname>\r\n")
+                    return
+                if target_user not in self.irc_client.dm_users:
+                    self.irc_client.dm_users.append(target_user)
+                    self.update_message_text(f"DM opened with {target_user}. Type your messages in the input box.\r\n")
+                    self.update_joined_channels_list("DM: " + target_user) 
+                else:
+                    self.update_message_text(f"You already have a DM opened with {target_user}.\r\n")
+                self.input_entry.delete(0, tk.END)
+            case "msg": #send a message to a user
                 parts = user_input.split(' ', 2)
                 if len(parts) >= 3:
                     receiver = parts[1]
@@ -1089,6 +1107,20 @@ class IRCClientGUI:
                     self.update_message_text(f'<{self.irc_client.nickname} -> {receiver}> {message_content}\r\n')
                 else:
                     self.update_message_text(f"Invalid usage. Usage: /msg <nickname> <message_content>\r\n")
+                self.input_entry.delete(0, tk.END)
+            case "cq": #close a DM with a user
+                target_user = user_input.split()[1] if len(user_input.split()) > 1 else None
+                if not target_user:
+                    self.update_message_text("Invalid usage. Usage: /cq <nickname>\r\n")
+                    return
+                if target_user in self.irc_client.dm_users:
+                    self.irc_client.dm_users.remove(target_user)
+                    if target_user in self.irc_client.dm_messages:
+                        del self.irc_client.dm_messages[target_user]  # Remove chat history
+                    self.update_message_text(f"DM closed with {target_user}.\r\n")
+                    self.update_joined_channels_list(None)  # Call the update method to refresh the GUI
+                else:
+                    self.update_message_text(f"You don't have a DM opened with {target_user}.\r\n")
                 self.input_entry.delete(0, tk.END)
             case "sw": #switch channels.
                 channel_name = user_input.split()[1]
@@ -1100,32 +1132,7 @@ class IRCClientGUI:
                 self.irc_client.send_message(f'TOPIC {self.irc_client.current_channel}')
                 self.input_entry.delete(0, tk.END)
             case "help": #HELP!
-                self.update_message_text(f'/join to join a channel\r\n')
-                self.update_message_text(f'/part to leave a channel\r\n')
-                self.update_message_text(f'/whois to whois a specific user\r\n')
-                self.update_message_text(f'    -Example: /whois nickname\r\n')
-                self.update_message_text(f'/friend adds a user to your friend list\r\n')
-                self.update_message_text(f'/unfriend removes a user from your friend list\r\n')
-                self.update_message_text(f'/sa to send a message to all channels youre in\r\n')
-                self.update_message_text(f'/sw <channel> to switch to given channel\r\n')
-                self.update_message_text(f'    -You can also click channels to switch\r\n')
-                self.update_message_text(f'Tab to complete nick names\r\n')
-                self.update_message_text(f'/msg to send a direct message\r\n')
-                self.update_message_text(f'    -Example: /msg NickServ IDENTIFY\r\n')
-                self.update_message_text(f'/quit closes connection and quits client\r\n')
-                self.update_message_text(f'/disconnect disconnects from the server\r\n')
-                self.update_message_text(f'/reconnect reconnects to last connected server\r\n')
-                self.update_message_text(f'/connect to connect to specific server\n')
-                self.update_message_text(f'    -Example: connect <server> <port>\r\n')
-                self.update_message_text(f'/ping to ping the connected server\r\n')
-                self.update_message_text(f'    -or /ping usernick to ping specific user\r\n')
-                self.update_message_text(f'/unignore & /ignore to unignore/ignore a specific user\r\n')
-                self.update_message_text(f'    -Example: /ignore nickname & /unignore nickname\r\n')
-                self.update_message_text(f'/clear to clear the chat window\r\n')
-                self.update_message_text(f'/CTCP Usage: /CTCP <nickname> <command> [parameters]\r\n')
-                self.update_message_text(f'    -Example: /CTCP Rudie CLIENTINFO\r\n')
-                self.update_message_text(f'/rat to rat ~~,=,^>\r\n')
-                self.update_message_text(f'Exit button will also send /quit and close client\r\n')
+                self.display_help()
                 self.input_entry.delete(0, tk.END)
             case "users": #refreshes user list
                 self.irc_client.sync_user_list()
@@ -1214,6 +1221,44 @@ class IRCClientGUI:
                 self.input_entry.insert(0, "~~,=,^>")
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
+
+    def display_help(self):
+        #general commands
+        self.update_message_text("=== General Commands ===\r\n")
+        self.update_message_text(f'/help - Display this help menu\r\n')
+        self.update_message_text(f'/clear - Clear the chat window\r\n')
+        self.update_message_text(f'/rat - To rat ~~,=,^>\r\n')
+        self.update_message_text(f'Exit button - Send /quit and close client\r\n')
+        self.update_message_text(f'Tab - Auto-complete nicknames\r\n')
+
+        #connection related commands
+        self.update_message_text("\r\n=== Connection Commands ===\r\n")
+        self.update_message_text(f'/connect <server> <port> - Connect to a specific server\r\n')
+        self.update_message_text(f'/disconnect - Disconnect from the server\r\n')
+        self.update_message_text(f'/reconnect - Reconnect to the last server\r\n')
+        self.update_message_text(f'/quit - Close connection and exit client\r\n')
+        self.update_message_text(f'/ping - Ping the connected server or /ping <usernick> to ping a specific user\r\n')
+
+        #channel and DM related commands
+        self.update_message_text("\r\n=== Channel & DM Commands ===\r\n")
+        self.update_message_text(f'/join <channel> - Join a channel\r\n')
+        self.update_message_text(f'/part <channel> - Leave a channel\r\n')
+        self.update_message_text(f'/sw <channel> - Switch to a given channel. Clicking on channels also switches\r\n')
+        self.update_message_text(f'/sa - Send a message to all joined channels\r\n')
+        self.update_message_text(f'/msg <nickname> <message> - Send a direct message, e.g., /msg NickServ IDENTIFY\r\n')
+        self.update_message_text(f'/query <nickname> - Open a DM with a user\r\n')
+        self.update_message_text(f'/cq <nickname> - Close the DM with a user\r\n')
+
+        #user related commands
+        self.update_message_text("\r\n=== User Commands ===\r\n")
+        self.update_message_text(f'/whois <nickname> - Whois a specific user, e.g., /whois nickname\r\n')
+        self.update_message_text(f'/ignore <nickname> & /unignore <nickname> - Ignore/Unignore a user\r\n')
+        self.update_message_text(f'/friend <nickname> - Add a user to your friend list\r\n')
+        self.update_message_text(f'/unfriend <nickname> - Remove a user from your friend list\r\n')
+
+        #advanced commands
+        self.update_message_text("\r\n=== Advanced Commands ===\r\n")
+        self.update_message_text(f'/CTCP <nickname> <command> [parameters] - CTCP command, e.g., /CTCP Rudie CLIENTINFO\r\n')
 
     def format_message_for_display(self, message):
         """
@@ -1365,9 +1410,9 @@ class IRCClientGUI:
                 self.joined_channels_text.tag_add("activity", f"{idx + 1}.0", f"{idx + 1}.end")
             if line in self.channels_with_mentions:  # then apply the "mentioned" tag
                 self.joined_channels_text.tag_add("mentioned", f"{idx + 1}.0", f"{idx + 1}.end")
-            if line == self.irc_client.current_channel:  # apply the "selected" tag if it's the current channel
+            if line == self.irc_client.current_channel or line == f"DM: {self.irc_client.current_channel}":  # apply the "selected" tag if it's the current channel or DM
                 self.joined_channels_text.tag_add("selected", f"{idx + 1}.0", f"{idx + 1}.end")
-                self.update_window_title(self.irc_client.nickname, self.irc_client.current_channel)  # using the actual current channel
+                self.update_window_title(self.irc_client.nickname, self.irc_client.current_channel)  # using the actual current channel or DM
 
         self.joined_channels_text.config(state=tk.DISABLED)
 
@@ -1496,34 +1541,54 @@ class IRCClientGUI:
             self.message_text.tag_configure("brightgreen", foreground="#C0FFEE")
             self.message_text.tag_add("brightgreen", "1.0", "end")
 
-            # apply blue color to nicknames
-            self.message_text.tag_configure("nickname_color", foreground="#c792ea") #c792ea(I want to try this color.)
+            # Process nicknames and color them
             start_idx = "1.0"
             while True:
+                # Find the opening '<'
                 start_idx = self.message_text.search('<', start_idx, stopindex=tk.END)
                 if not start_idx:
                     break
-                end_idx = self.message_text.search('>', start_idx, stopindex=tk.END)
+                # Find the closing '>' ensuring no newlines between
+                end_idx = self.message_text.search('>', start_idx, f"{start_idx} lineend")
                 if end_idx:
                     end_idx = f"{end_idx}+1c"  # Include the '>' character
-                    self.message_text.tag_add("nickname_color", start_idx, end_idx)
+                    # Extract the nickname
+                    nickname = self.message_text.get(start_idx + "+1c", end_idx + "-1c")
+
+                    # If nickname doesn't have an assigned color, generate one
+                    if nickname not in self.nickname_colors:
+                        self.nickname_colors[nickname] = self.generate_random_color()
+                    nickname_color = self.nickname_colors[nickname]
+
+                    # If it's the main user's nickname, set color to green
+                    if nickname == self.irc_client.nickname:
+                        nickname_color = "#00ff62"
+
+                    self.message_text.tag_configure(f"nickname_{nickname}", foreground=nickname_color)
+                    self.message_text.tag_add(f"nickname_{nickname}", start_idx, end_idx)
                     start_idx = end_idx
                 else:
-                    break
-            # apply color to main user's name
-            self.message_text.tag_configure("main_user_color", foreground="#00ff62")
-            start_idx = "1.0"
+                    start_idx = f"{start_idx}+1c"
+
             main_user_name = self.irc_client.nickname
+            start_idx = "1.0"
             while True:
                 start_idx = self.message_text.search(main_user_name, start_idx, stopindex=tk.END)
                 if not start_idx:
                     break
                 end_idx = f"{start_idx}+{len(main_user_name)}c"
+                self.message_text.tag_configure("main_user_color", foreground="#00ff62")
                 self.message_text.tag_add("main_user_color", start_idx, end_idx)
                 start_idx = end_idx
 
+                # Check if the start index has reached the end of the text
+                if start_idx == tk.END:
+                    break
+
             urls = self.find_urls(cleaned_formatted_text)
             for url in urls:
+                # Mark found URLs in the text to avoid them being treated as channels
+                cleaned_formatted_text = cleaned_formatted_text.replace(url, f"<URL>{url}</URL>")
                 start_idx = self.message_text.search(url, "1.0", tk.END)
                 if start_idx:
                     end_idx = f"{start_idx}+{len(url)}c"
@@ -1533,12 +1598,14 @@ class IRCClientGUI:
 
             channels = self.find_channels(cleaned_formatted_text)
             for channel in channels:
-                start_idx = self.message_text.search(channel, "1.0", tk.END)
-                if start_idx:
-                    end_idx = f"{start_idx}+{len(channel)}c"
-                    self.message_text.tag_add("channel", start_idx, end_idx)
-                    self.message_text.tag_configure("channel", foreground="cyan", underline=1)
-                    self.message_text.tag_bind("channel", "<Button-1>", lambda e, channel=channel: self.join_channel(channel))
+                # Ensure we're not treating marked URLs as channels
+                if "<URL>" not in channel and "</URL>" not in channel:
+                    start_idx = self.message_text.search(channel, "1.0", tk.END)
+                    if start_idx:
+                        end_idx = f"{start_idx}+{len(channel)}c"
+                        self.message_text.tag_add("channel", start_idx, end_idx)
+                        self.message_text.tag_configure("channel", foreground="cyan", underline=1)
+                        self.message_text.tag_bind("channel", "<Button-1>", lambda e, channel=channel: self.join_channel(channel))
 
         self.root.after(0, _update_message_text)
 
@@ -1556,7 +1623,7 @@ class IRCClientGUI:
                 text += f'{timestamp} <{sender}> {message}\n'
             self.update_message_text(text)
         else:
-            self.update_message_text('No messages to display in the current channel.')
+            self.update_message_text('No messages to display in the current channel.\n')
         self.update_user_list(channel)
 
     def display_message_in_chat(self, message):
@@ -1611,7 +1678,7 @@ class IRCClientGUI:
 
     def find_urls(self, text):
         # A simple regex to detect URLs
-        url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
+        url_pattern = re.compile(r'(\w+://[\w$-_@.&+#~!*\\(\\),;%]+)')
         return url_pattern.findall(text)
 
     def open_url(self, url):
@@ -1620,7 +1687,7 @@ class IRCClientGUI:
 
     def find_channels(self, text):
         # A regex to detect channel names starting with #
-        channel_pattern = re.compile(r'(?i)(##?#?\w[\w\-\/]*\w)')
+        channel_pattern = re.compile(r'(?i)(#+[^\s,]+)')
         return channel_pattern.findall(text)
 
     def join_channel(self, channel):
