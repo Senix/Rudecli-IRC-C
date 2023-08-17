@@ -72,6 +72,8 @@ class IRCClient:
         self.reconnection_thread = None
         self.dm_users = []
         self.dm_messages = {}
+        self.sound_ctcp_count = 0
+        self.sound_ctcp_limit = 5
 
     def read_config(self, config_file):
         """
@@ -705,10 +707,16 @@ class IRCClient:
             self.send_message(f'NOTICE {sender} :{client_info_reply}')
 
         elif ctcp_command == "SOUND":
-            # SOUND CTCP can include a file or description of the sound. This is just for logging.
-            sound_data = ctcp_parts[1] if len(ctcp_parts) > 1 else "Unknown sound"
-            print(f"Received SOUND CTCP: BEEP!")
-            self.trigger_beep_notification()
+            if self.sound_ctcp_count < self.sound_ctcp_limit:
+                # Increment the counter
+                self.sound_ctcp_count += 1
+                
+                # SOUND CTCP can include a file or description of the sound. This is just for logging.
+                sound_data = ctcp_parts[1] if len(ctcp_parts) > 1 else "Unknown sound"
+                print(f"Received SOUND CTCP: BEEP!")
+                self.trigger_beep_notification()
+            else:
+                print("SOUND CTCP limit reached. Ignoring...")
 
         else:
             if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
