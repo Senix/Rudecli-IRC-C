@@ -335,322 +335,78 @@ class IRCClient:
                         sender = None
                     self.message_queue.put(raw_message)
 
-                    if tokens.command == "PING":
-                        ping_param = tokens.params[0]
-                        pong_response = f'PONG {ping_param}'
-                        self.send_message(pong_response)
-
-                    elif tokens.command == "ERROR":
-                        #process server feedback message
-                        self.server_feedback_buffer += raw_message + "\n"
-                        self.irc_client_gui.update_server_feedback_text(raw_message)
-
-                    elif tokens.command == "CAP":
-                        if "ACK" in tokens.params and "sasl" in tokens.params:
-                            # Server supports SASL
-                            self.send_message("AUTHENTICATE PLAIN")
-                        elif "NAK" in tokens.params:
-                            # Server does not support SASL
-                            print("Server does not support SASL.")
-                            self.irc_client_gui.update_server_feedback_text("Error: Server does not support SASL.")
-                            # If SASL is not supported, end the capability negotiation to continue the connection process
-                            self.send_message("CAP END")
-
-                    elif tokens.command == "AUTHENTICATE" and tokens.params[0] == "+":
-                        # Server is ready to receive authentication data.
-                        import base64
-                        auth_string = f"{self.sasl_username}\0{self.sasl_username}\0{self.sasl_password}"
-                        encoded_auth = base64.b64encode(auth_string.encode()).decode()
-                        self.send_message(f"AUTHENTICATE {encoded_auth}")
-
-                    elif tokens.command == "903":
-                        # SASL authentication successful
-                        print("SASL authentication successful.")
-                        self.irc_client_gui.update_server_feedback_text("SASL authentication successful.")
-                        # End the capability negotiation after successful SASL authentication
-                        self.send_message("CAP END")
-
-                    elif tokens.command == "904":
-                        # SASL authentication failed
-                        print("SASL authentication failed!")
-                        self.irc_client_gui.update_server_feedback_text("Error: SASL authentication failed!")
-                        # End the capability negotiation even if SASL authentication failed
-                        self.send_message("CAP END")
-
-                    elif tokens.command == "376" or tokens.command == "001":  # Welcome <3
-                        self.irc_client_gui.update_server_feedback_text(raw_message)
-                        self.send_message(f'PRIVMSG NickServ :IDENTIFY {self.nickserv_password}')
-                        if not self.has_auto_joined:
-                            for channel in self.auto_join_channels:
-                                self.join_channel(channel)
-                            self.has_auto_joined = True
-
-                    elif tokens.command == "NOTICE":
-                        target = tokens.params[0]
-                        notice_content = tokens.params[1]
+                    match tokens.command:
+                        case "PING":
+                            self.handle_ping(tokens)
                         
-                        # Check if the target is a channel or the user
-                        if target.startswith(("#", "&", "+", "!")):
-                            # This is a channel-specific NOTICE
-                            if target not in self.channel_messages:
-                                self.channel_messages[target] = []
-                            self.channel_messages[target].append((timestamp, sender, notice_content))
-                            if target == self.current_channel:
-                                received_messages += f'{timestamp} [NOTICE] <{sender}> {notice_content}'
-                            else:
-                                self.notify_channel_activity(target)
-                        else:
-                            # This is a user-specific NOTICE, display in a general "server" or "status" tab
-                            server_tab_content = f'[SERVER NOTICE] <{sender}> {notice_content}'
-                            self.irc_client_gui.update_server_feedback_text(server_tab_content)
-
-                    elif tokens.command == "353":
-                        if len(tokens.params) == 4:
-                            channel = tokens.params[2]
-                            users = tokens.params[3].split()
-                        elif len(tokens.params) == 3:
-                            channel = tokens.params[1]
-                            users = tokens.params[2].split()
-                        else:
-                            print("Error: Unexpected format for the 353 command.")
-                            continue
-
-                        if channel not in self.temp_user_list:
-                            self.temp_user_list[channel] = []
-                        self.temp_user_list[channel].extend(users)  # Accumulate users in the temp list
-
-                    elif tokens.command == "366":
-                        channel = tokens.params[1]
-                        
-                        with self.user_list_lock:
-                            if channel in self.temp_user_list:
-                                self.user_list[channel] = self.temp_user_list[channel]
-                                del self.temp_user_list[channel]
-                                self.irc_client_gui.update_joined_channels_list(channel)
-
-                    elif tokens.command == "311":
-                        # Handle WHOIS reply for user info
-                        nickname = tokens.params[1]
-                        username = tokens.params[2]
-                        hostname = tokens.params[3]
-                        realname = tokens.params[5]
-                        self.whois_data[nickname] = {"Username": username, "Hostname": hostname, "Realname": realname}
-
-                    elif tokens.command == "312":
-                        # Handle WHOIS reply for server info
-                        nickname = tokens.params[1]
-                        server_info = tokens.params[2]
-                        if self.whois_data.get(nickname):
-                            self.whois_data[nickname]["Server"] = server_info
-
-                    elif tokens.command == "313":
-                        # Handle WHOIS reply for operator info
-                        nickname = tokens.params[1]
-                        operator_info = tokens.params[2]
-                        if self.whois_data.get(nickname):
-                            self.whois_data[nickname]["Operator"] = operator_info
-
-                    elif tokens.command == "317":
-                        # Handle WHOIS reply for idle time
-                        nickname = tokens.params[1]
-                        idle_time_seconds = int(tokens.params[2])
-                        idle_time = str(datetime.timedelta(seconds=idle_time_seconds))
-                        if self.whois_data.get(nickname):
-                            self.whois_data[nickname]["Idle Time"] = idle_time
-
-                    elif tokens.command == "319":
-                        # Handle WHOIS reply for channels the user is in
-                        nickname = tokens.params[1]
-                        channels = tokens.params[2]
-                        self.whois_data[nickname]["Channels"] = channels
-
-                    elif tokens.command == "301":
-                        # Handle WHOIS reply for user's away status
-                        nickname = tokens.params[1]
-                        away_message = tokens.params[2]
-                        self.whois_data[nickname]["Away"] = away_message
-
-                    elif tokens.command == "671":
-                        # Handle WHOIS reply for user's secure connection status
-                        nickname = tokens.params[1]
-                        secure_message = tokens.params[2]
-                        self.whois_data[nickname]["Secure Connection"] = secure_message
-
-                    elif tokens.command == "338":
-                        # Handle WHOIS reply for user's actual IP address
-                        nickname = tokens.params[1]
-                        ip_address = tokens.params[2]
-                        self.whois_data[nickname]["Actual IP"] = ip_address
-
-                    elif tokens.command == "318":
-                        # End of WHOIS reply
-                        nickname = tokens.params[1]
-                        if self.whois_data.get(nickname):
-                            whois_response = f"WHOIS for {nickname}:\n"
-                            for key, value in self.whois_data[nickname].items():
-                                whois_response += f"{key}: {value}\n"
-                            whois_response += "\n"
-                            self.irc_client_gui.update_message_text(whois_response)
-
-                    elif tokens.command == "433":
-                        # Handle nickname already in use
-                        if tokens.params and len(tokens.params) > 1:
-                            taken_nickname = tokens.params[1]
-                            error_message = tokens.params[2]
-                            msg = f"Error: The nickname {taken_nickname} is already in use. Reason: {error_message}"
-                            self.irc_client_gui.update_server_feedback_text(msg)
-                            
-                            # Try the next nickname in the backup list
-                            if self.current_nick_index < len(self.backup_nicknames):
-                                new_nickname = self.backup_nicknames[self.current_nick_index]
-                                self.current_nick_index += 1
-                                self.change_nickname(new_nickname)
-                                feedback = f"Attempting to use nickname: {new_nickname}"
-                                self.irc_client_gui.update_server_feedback_text(feedback)
-                            else:
-                                feedback = "All backup nicknames are exhausted. Please set a new nickname."
-                                self.irc_client_gui.update_server_feedback_text(feedback)
-
-                    elif tokens.command == "PART":
-                        if tokens.source is not None:
-                            quit_user = tokens.hostmask.nickname
-                            quit_user = self.strip_nick_prefix(quit_user)
-                            channel = tokens.params[0]
-                            
-                            with self.user_list_lock:
-                                if channel in self.user_list:
-                                    similar_users = [user for user in self.user_list[channel] if user == quit_user or user.startswith('@' + quit_user) or user.startswith('+' + quit_user)]
-                                    for user in similar_users:
-                                        self.user_list[channel].remove(user)
-                                    self.irc_client_gui.update_user_list(channel)
-                        self.server_feedback_buffer += raw_message + "\n"
-                        self.irc_client_gui.update_server_feedback_text(raw_message)
-
-                    elif tokens.command == "JOIN":
-                        if tokens.source is not None:
-                            join_user = tokens.hostmask.nickname
-                            channel = tokens.params[0]  
-                            if join_user in self.friend_list:
-                                self.friend_online(channel, join_user) 
-                            with self.user_list_lock:
-                                if channel in self.user_list:
-                                    if join_user not in self.user_list[channel]:
-                                        self.user_list[channel].append(join_user)
-                                    else:
-                                        self.user_list[channel].remove(join_user)
-                                        self.user_list[channel].append(join_user)  # To make sure the user is at the end of the list
-                                    self.irc_client_gui.update_user_list(channel)
-                                else:
-                                    self.user_list[channel] = [join_user]
-                                    self.irc_client_gui.update_user_list(channel)
-                        self.server_feedback_buffer += raw_message + "\n"
-                        self.irc_client_gui.update_server_feedback_text(raw_message)
-
-                    elif tokens.command == "QUIT":
-                        if tokens.source is not None:
-                            quit_user = tokens.hostmask.nickname
-                            
-                            with self.user_list_lock:
-                                for channel in self.user_list:
-                                    similar_users = [user for user in self.user_list[channel] if user == quit_user or user.startswith('@' + quit_user) or user.startswith('+' + quit_user)]
-                                    for user in similar_users:
-                                        self.user_list[channel].remove(user)
-                                        self.irc_client_gui.update_user_list(channel)
-                        self.server_feedback_buffer += raw_message + "\n"
-                        self.irc_client_gui.update_server_feedback_text(raw_message)
-
-                    elif tokens.command == "NICK":
-                        old_nickname = tokens.hostmask.nickname
-                        new_nickname = tokens.params[0]
-                        nick_change_message_content = f"{old_nickname} has changed their nickname to {new_nickname}"
-                        
-                        # Display the nick change message in the chat window
-                        self.irc_client_gui.display_message_in_chat(nick_change_message_content)
-                        self.irc_client_gui.update_user_list(channel)
-                        self.irc_client_gui.update_server_feedback_text(raw_message)
-
-                    elif tokens.command == "MODE":
-                        channel = tokens.params[0]
-                        mode = tokens.params[1]
-                        if len(tokens.params) > 2:  # Ensure there's a target user for the mode change
-                            target_user = tokens.params[2]
-                            self.handle_mode_changes(channel, mode, target_user)
-                        self.irc_client_gui.update_server_feedback_text(raw_message)
-
-                    elif tokens.command == "PRIVMSG":
-                        target = tokens.params[0]
-                        message_content = tokens.params[1]
-                        
-                        if target == self.nickname:
-                            # This is a DM
-                            if sender not in self.dm_users:
-                                self.dm_users.append(sender)
-                            
-                            received_dm = f"{timestamp} <{sender}> {message_content}\n"
-                            self.log_message(f"{sender}", sender, message_content)
-                            
-                            if sender not in self.dm_messages:
-                                self.dm_messages[sender] = []
-                            
-                            self.dm_messages[sender].append(received_dm)
-
-                            # Check if this DM is already in the channels_with_activity list
-                            dm_name = f"DM: {sender}"
-                            
-                            if dm_name not in self.irc_client_gui.channels_with_activity:
-                                self.irc_client_gui.channels_with_activity.append(dm_name)
-                                self.irc_client_gui.update_joined_channels_list(channel)
-                            
-                            # Only display the DM in the GUI if the currently selected channel is the DM from this sender
-                            if self.current_channel == sender:
-                                self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
-                        else:
-                            # This is a channel message
-                            self.log_message(target, sender, message_content, is_sent=False)
-
-                        if sender == self.nickname:
-                            continue
-                        if self.should_ignore(sender):  # ignore based on hostmask
-                            continue
-                        if sender in self.ignore_list:  # ignore based on nick
-                            continue
-                        if self.nickname in message_content:
-                            self.trigger_beep_notification(channel_name=target, title="Ping", message="You've been pinged!")
-                            if target not in self.irc_client_gui.channels_with_mentions:
-                                self.irc_client_gui.channels_with_mentions.append(target)
-                                self.irc_client_gui.update_joined_channels_list(channel)
-                        if target not in self.irc_client_gui.channels_with_activity:
-                            self.irc_client_gui.channels_with_activity.append(target)
-                            self.irc_client_gui.update_joined_channels_list(channel)
-
-                        if message_content.startswith("\x01") and message_content.endswith("\x01"):
-                            received_message = self.handle_ctcp_request(sender, message_content)
-                            if received_message:
-                                if target not in self.channel_messages:
-                                    self.channel_messages[target] = []
-                                self.channel_messages[target].append((timestamp, sender, received_message))
-                                if target == self.current_channel:
-                                    received_messages += f'{timestamp} {received_message}\n'
-                                else:
-                                    pass
-
-                        else:
-                            if target not in self.channel_messages:
-                                self.channel_messages[target] = []
-                            self.channel_messages[target].append((timestamp, sender, message_content))
-                            if target == self.current_channel:
-                                received_messages += f'{timestamp} <{sender}> {message_content}\n'
-                            else:
-                                pass #self.notify_channel_activity(target)
-
-                    else:
-                        if raw_message.startswith(':'):
-                            # move message starting with ":" to server feedback
+                        case "ERROR":
                             self.server_feedback_buffer += raw_message + "\n"
                             self.irc_client_gui.update_server_feedback_text(raw_message)
-                        else:
-                            # print other messages in the main chat window
-                            self.irc_client_gui.update_message_text(raw_message)
+                        
+                        case "CAP":
+                            self.handle_cap(tokens)
+
+                        case "AUTHENTICATE":
+                            self.handle_sasl_auth(tokens)
+
+                        case "903":
+                            self.handle_sasl_successful()
+
+                        case "904":
+                            self.handle_sasl_failed()
+
+                        case "376" | "001":
+                            self.handle_welcome_or_end_of_motd(raw_message)
+
+                        case "NOTICE":
+                            received_message = self.handle_notice(tokens, timestamp, sender)
+                            if received_message:
+                                received_messages += received_message
+
+                        case "353":
+                            self.handle_353(tokens)
+
+                        case "366":
+                            self.handle_366(tokens)
+
+                        case "311" | "312" | "313" | "317" | "319" | "301" | "671" | "338" | "318":
+                            self.handle_whois_replies(tokens.command, tokens)
+
+                        case "433":
+                            self.handle_nickname_conflict(tokens)
+
+                        case "PART":
+                            self.handle_part_command(tokens, raw_message)
+
+                        case "JOIN":
+                            self.handle_join_command(tokens, raw_message)
+
+                        case "QUIT":
+                            self.handle_quit_command(tokens, raw_message)
+
+                        case "NICK":
+                            old_nickname = tokens.hostmask.nickname
+                            new_nickname = tokens.params[0]
+                            nick_change_message_content = f"{old_nickname} has changed their nickname to {new_nickname}"
+                            
+                            # Display the nick change message in the chat window
+                            self.irc_client_gui.display_message_in_chat(nick_change_message_content)
+                            self.irc_client_gui.update_user_list(channel)
+                            self.irc_client_gui.update_server_feedback_text(raw_message)
+
+                        case "MODE":
+                            channel = tokens.params[0]
+                            mode = tokens.params[1]
+                            if len(tokens.params) > 2:  # Ensure there's a target user for the mode change
+                                target_user = tokens.params[2]
+                                self.handle_mode_changes(channel, mode, target_user)
+                            self.irc_client_gui.update_server_feedback_text(raw_message)
+
+                        case "PRIVMSG":
+                            received_messages = self.handle_privmsg(tokens, timestamp)
+
+                        case _:
+                            self.handle_default_case(raw_message)
 
                     # limit the chat history size for each channel
                     for channel in self.channel_messages:
@@ -667,6 +423,290 @@ class IRCClient:
             if received_messages:
                 self.message_queue.put(received_messages)
                 self.irc_client_gui.update_message_text(received_messages)
+
+    def handle_ping(self, tokens):
+        ping_param = tokens.params[0]
+        pong_response = f'PONG {ping_param}'
+        self.send_message(pong_response)
+
+    def handle_cap(self, tokens):
+        if "ACK" in tokens.params and "sasl" in tokens.params:
+            self.send_message("AUTHENTICATE PLAIN")
+        elif "NAK" in tokens.params:
+            print("Server does not support SASL.")
+            self.irc_client_gui.update_server_feedback_text("Error: Server does not support SASL.")
+            self.send_message("CAP END")
+
+    def handle_sasl_auth(self, tokens):
+        if tokens.params[0] == "+":
+            # Server is ready to receive authentication data.
+            import base64
+            auth_string = f"{self.sasl_username}\0{self.sasl_username}\0{self.sasl_password}"
+            encoded_auth = base64.b64encode(auth_string.encode()).decode()
+            self.send_message(f"AUTHENTICATE {encoded_auth}")
+
+    def handle_sasl_successful(self):
+        print("SASL authentication successful.")
+        self.irc_client_gui.update_server_feedback_text("SASL authentication successful.")
+        # End the capability negotiation after successful SASL authentication
+        self.send_message("CAP END")
+
+    def handle_sasl_failed(self):
+        print("SASL authentication failed!")
+        self.irc_client_gui.update_server_feedback_text("Error: SASL authentication failed!")
+        # End the capability negotiation even if SASL authentication failed
+        self.send_message("CAP END")
+
+    def handle_welcome_or_end_of_motd(self, raw_message):
+        self.irc_client_gui.update_server_feedback_text(raw_message)
+        self.send_message(f'PRIVMSG NickServ :IDENTIFY {self.nickserv_password}')
+        if not self.has_auto_joined:
+            for channel in self.auto_join_channels:
+                self.join_channel(channel)
+            self.has_auto_joined = True
+
+    def handle_notice(self, tokens, timestamp, sender):
+        target = tokens.params[0]
+        notice_content = tokens.params[1]
+        
+        # Check if the target is a channel or the user
+        if target.startswith(("#", "&", "+", "!")):
+            # This is a channel-specific NOTICE
+            if target not in self.channel_messages:
+                self.channel_messages[target] = []
+            self.channel_messages[target].append((timestamp, sender, notice_content))
+            if target == self.current_channel:
+                return f'{timestamp} [NOTICE] <{sender}> {notice_content}'
+            else:
+                self.notify_channel_activity(target)
+                return None
+        else:
+            # This is a user-specific NOTICE, display in a general "server" or "status" tab
+            server_tab_content = f'[SERVER NOTICE] <{sender}> {notice_content}'
+            self.irc_client_gui.update_server_feedback_text(server_tab_content)
+            return None
+
+    def handle_353(self, tokens):
+        if len(tokens.params) == 4:
+            channel = tokens.params[2]
+            users = tokens.params[3].split()
+        elif len(tokens.params) == 3:
+            channel = tokens.params[1]
+            users = tokens.params[2].split()
+        else:
+            print("Error: Unexpected format for the 353 command.")
+            return
+
+        if channel not in self.temp_user_list:
+            self.temp_user_list[channel] = []
+        self.temp_user_list[channel].extend(users)  # Accumulate users in the temp list
+
+    def handle_366(self, tokens):
+        channel = tokens.params[1]
+        
+        with self.user_list_lock:
+            if channel in self.temp_user_list:
+                self.user_list[channel] = self.temp_user_list[channel]
+                del self.temp_user_list[channel]
+                self.irc_client_gui.update_joined_channels_list(channel)
+
+    def handle_whois_replies(self, command, tokens):
+        nickname = tokens.params[1]
+
+        if command == "311":
+            username = tokens.params[2]
+            hostname = tokens.params[3]
+            realname = tokens.params[5]
+            self.whois_data[nickname] = {"Username": username, "Hostname": hostname, "Realname": realname}
+
+        elif command == "312":
+            server_info = tokens.params[2]
+            if self.whois_data.get(nickname):
+                self.whois_data[nickname]["Server"] = server_info
+
+        elif command == "313":
+            operator_info = tokens.params[2]
+            if self.whois_data.get(nickname):
+                self.whois_data[nickname]["Operator"] = operator_info
+
+        elif command == "317":
+            idle_time_seconds = int(tokens.params[2])
+            idle_time = str(datetime.timedelta(seconds=idle_time_seconds))
+            if self.whois_data.get(nickname):
+                self.whois_data[nickname]["Idle Time"] = idle_time
+
+        elif command == "319":
+            channels = tokens.params[2]
+            self.whois_data[nickname]["Channels"] = channels
+
+        elif command == "301":
+            away_message = tokens.params[2]
+            self.whois_data[nickname]["Away"] = away_message
+
+        elif command == "671":
+            secure_message = tokens.params[2]
+            self.whois_data[nickname]["Secure Connection"] = secure_message
+
+        elif command == "338":
+            ip_address = tokens.params[2]
+            self.whois_data[nickname]["Actual IP"] = ip_address
+
+        elif command == "318":
+            if self.whois_data.get(nickname):
+                whois_response = f"WHOIS for {nickname}:\n"
+                for key, value in self.whois_data[nickname].items():
+                    whois_response += f"{key}: {value}\n"
+                whois_response += "\n"
+                self.irc_client_gui.update_message_text(whois_response)
+
+    def handle_nickname_conflict(self, tokens):
+        if tokens.params and len(tokens.params) > 1:
+            taken_nickname = tokens.params[1]
+            error_message = tokens.params[2]
+            msg = f"Error: The nickname {taken_nickname} is already in use. Reason: {error_message}"
+            self.irc_client_gui.update_server_feedback_text(msg)
+
+            # Try the next nickname in the backup list
+            if self.current_nick_index < len(self.backup_nicknames):
+                new_nickname = self.backup_nicknames[self.current_nick_index]
+                self.current_nick_index += 1
+                self.change_nickname(new_nickname)
+                feedback = f"Attempting to use nickname: {new_nickname}"
+                self.irc_client_gui.update_server_feedback_text(feedback)
+            else:
+                feedback = "All backup nicknames are exhausted. Please set a new nickname."
+                self.irc_client_gui.update_server_feedback_text(feedback)
+
+    def handle_part_command(self, tokens, raw_message):
+        if tokens.source is not None:
+            quit_user = tokens.hostmask.nickname
+            quit_user = self.strip_nick_prefix(quit_user)
+            channel = tokens.params[0]
+
+            with self.user_list_lock:
+                if channel in self.user_list:
+                    similar_users = [user for user in self.user_list[channel] if user == quit_user or user.startswith('@' + quit_user) or user.startswith('+' + quit_user)]
+                    for user in similar_users:
+                        self.user_list[channel].remove(user)
+                    self.irc_client_gui.update_user_list(channel)
+        self.server_feedback_buffer += raw_message + "\n"
+        self.irc_client_gui.update_server_feedback_text(raw_message)
+
+    def handle_join_command(self, tokens, raw_message):
+        if tokens.source is not None:
+            join_user = tokens.hostmask.nickname
+            channel = tokens.params[0]
+            
+            if join_user in self.friend_list:
+                self.friend_online(channel, join_user)
+            
+            with self.user_list_lock:
+                if channel in self.user_list:
+                    if join_user not in self.user_list[channel]:
+                        self.user_list[channel].append(join_user)
+                    else:
+                        self.user_list[channel].remove(join_user)
+                        self.user_list[channel].append(join_user)  # Ensure the user is at the end of the list
+                    self.irc_client_gui.update_user_list(channel)
+                else:
+                    self.user_list[channel] = [join_user]
+                    self.irc_client_gui.update_user_list(channel)
+        
+        self.server_feedback_buffer += raw_message + "\n"
+        self.irc_client_gui.update_server_feedback_text(raw_message)
+
+    def handle_quit_command(self, tokens, raw_message):
+        if tokens.source is not None:
+            quit_user = tokens.hostmask.nickname
+            
+            with self.user_list_lock:
+                for channel in self.user_list:
+                    similar_users = [user for user in self.user_list[channel] 
+                                     if user == quit_user or 
+                                     user.startswith('@' + quit_user) or 
+                                     user.startswith('+' + quit_user)]
+                    for user in similar_users:
+                        self.user_list[channel].remove(user)
+                    self.irc_client_gui.update_user_list(channel)
+        
+        self.server_feedback_buffer += raw_message + "\n"
+        self.irc_client_gui.update_server_feedback_text(raw_message)
+
+    def handle_privmsg(self, tokens, timestamp):
+        target = tokens.params[0]
+        message_content = tokens.params[1]
+        sender = tokens.hostmask.nickname  # Define the sender here
+        received_messages = ""
+
+        if target == self.nickname:
+            # This is a DM
+            if sender not in self.dm_users:
+                self.dm_users.append(sender)
+
+            received_dm = f"{timestamp} <{sender}> {message_content}\n"
+            self.log_message(f"{sender}", sender, message_content)
+
+            if sender not in self.dm_messages:
+                self.dm_messages[sender] = []
+
+            self.dm_messages[sender].append(received_dm)
+
+            # Check if this DM is already in the channels_with_activity list
+            dm_name = f"DM: {sender}"
+
+            if dm_name not in self.irc_client_gui.channels_with_activity:
+                self.irc_client_gui.channels_with_activity.append(dm_name)
+                
+            # Update the channels list in the GUI every time a DM is received
+            self.irc_client_gui.update_joined_channels_list(dm_name) 
+
+            # Only display the DM in the GUI if the currently selected channel is the DM from this sender
+            if self.current_channel == sender:
+                self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
+        else:
+            # This is a channel message
+            self.log_message(target, sender, message_content, is_sent=False)
+
+        if sender == self.nickname:
+            return
+        if self.should_ignore(sender):  # ignore based on hostmask
+            return
+        if sender in self.ignore_list:  # ignore based on nick
+            return
+        if self.nickname in message_content:
+            self.trigger_beep_notification(channel_name=target, title="Ping", message="You've been pinged!")
+            if target not in self.irc_client_gui.channels_with_mentions:
+                self.irc_client_gui.channels_with_mentions.append(target)
+                self.irc_client_gui.update_joined_channels_list(target)
+        if target not in self.irc_client_gui.channels_with_activity:
+            self.irc_client_gui.channels_with_activity.append(target)
+            self.irc_client_gui.update_joined_channels_list(target)
+
+        if message_content.startswith("\x01") and message_content.endswith("\x01"):
+            received_message = self.handle_ctcp_request(sender, message_content)
+            if received_message:
+                if target not in self.channel_messages:
+                    self.channel_messages[target] = []
+                self.channel_messages[target].append((timestamp, sender, received_message))
+                if target == self.current_channel:
+                    received_messages += f'{timestamp} {received_message}\n'
+        else:
+            if target not in self.channel_messages:
+                self.channel_messages[target] = []
+            self.channel_messages[target].append((timestamp, sender, message_content))
+            if target == self.current_channel:
+                received_messages += f'{timestamp} <{sender}> {message_content}\n'
+
+        return received_messages
+
+    def handle_default_case(self, raw_message):
+        if raw_message.startswith(':'):
+            # move message starting with ":" to server feedback
+            self.server_feedback_buffer += raw_message + "\n"
+            self.irc_client_gui.update_server_feedback_text(raw_message)
+        else:
+            # print other messages in the main chat window
+            self.irc_client_gui.update_message_text(raw_message)
 
     def handle_ctcp_request(self, sender, message_content):
         # Split the CTCP message content at the first space to separate the command from any data
