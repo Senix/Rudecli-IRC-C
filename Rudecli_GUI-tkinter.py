@@ -46,36 +46,46 @@ from tkinter.constants import *
 
 class IRCClient:
     MAX_MESSAGE_HISTORY_SIZE = 200
+
     def __init__(self):
-        self.exit_event = threading.Event()
-        self.joined_channels: list = []
-        self.current_channel: str = ''
-        self.channel_messages = {}
+        # Initialization method and related properties
+        self.irc_client_gui = None
         self.decoder = irctokens.StatefulDecoder()
         self.encoder = irctokens.StatefulEncoder()
-        self.irc_client_gui = None
         self.message_queue = Queue()
+        self.exit_event = threading.Event()
+
+        # Data structures and storage properties
+        self.channel_messages = {}
+        self.joined_channels: list = []
+        self.current_channel: str = ''
         self.user_list = {}
-        self.receive_thread = None
-        self.stay_alive_thread = None
         self.temp_user_list = {}
-        self.backup_nicknames = ["Rudie", "stixie"]
-        self.current_nick_index = 0
-        self.ignore_list = []
-        self.friend_list = []
-        self.load_ignore_list()
-        self.load_friend_list()
-        self.user_dual_privileges = {}
         self.whois_data = {}
-        self.user_list_lock = threading.Lock()
-        self.has_auto_joined = False
-        self.reconnection_thread = None
         self.dm_users = []
         self.dm_messages = {}
+        self.user_dual_privileges = {}
+        self.backup_nicknames = ["Rudie", "stixie"]
+        self.ignore_list = []
+        self.friend_list = []
+        self.server_capabilities = {}
+        self.load_ignore_list()
+        self.load_friend_list()
+
+        # Threading and synchronization related properties
+        self.user_list_lock = threading.Lock()
+        self.receive_thread = None
+        self.stay_alive_thread = None
+        self.reconnection_thread = None
+
+        # Protocol specific properties
+        self.current_nick_index = 0
+        self.has_auto_joined = False
         self.sound_ctcp_count = 0
         self.sound_ctcp_limit = 5
-        self.reset_timer = None
         self.sound_ctcp_limit_flag = False 
+
+        # Other properties
         self.reset_timer = None
 
     def read_config(self, config_file):
@@ -363,6 +373,9 @@ class IRCClient:
                             if received_message:
                                 received_messages += received_message
 
+                        case "005":
+                            self.handle_isupport(tokens)
+
                         case "353":
                             self.handle_353(tokens)
 
@@ -387,12 +400,7 @@ class IRCClient:
                         case "NICK":
                             old_nickname = tokens.hostmask.nickname
                             new_nickname = tokens.params[0]
-                            nick_change_message_content = f"{old_nickname} has changed their nickname to {new_nickname}"
-                            
-                            # Display the nick change message in the chat window
-                            self.irc_client_gui.display_message_in_chat(nick_change_message_content)
-                            self.irc_client_gui.update_user_list(channel)
-                            self.irc_client_gui.update_server_feedback_text(raw_message)
+                            self.handle_nick_change(old_nickname, new_nickname, channel, raw_message)
 
                         case "MODE":
                             channel = tokens.params[0]
@@ -485,6 +493,32 @@ class IRCClient:
             server_tab_content = f'[SERVER NOTICE] <{sender}> {notice_content}'
             self.irc_client_gui.update_server_feedback_text(server_tab_content)
             return None
+
+    def handle_isupport(self, tokens):
+        """
+        Handle the RPL_ISUPPORT (005) server message.
+        This method processes the server capabilities and updates the client's knowledge about them.
+        """
+        isupport_params = tokens.params[:-1]
+
+        # Store these in a dictionary or a suitable data structure
+        new_capabilities = {}  # Track the new capabilities from this specific message
+        for param in isupport_params:
+            if '=' in param:
+                key, value = param.split('=', 1)
+                if key not in self.server_capabilities:  # Only display if it's a new capability
+                    new_capabilities[key] = value
+                    self.server_capabilities[key] = value
+            else:
+                # Some capabilities might just be flags without a value
+                if param not in self.server_capabilities:
+                    new_capabilities[param] = True
+                    self.server_capabilities[param] = True
+
+        # Display these new capabilities:
+        for key, value in new_capabilities.items():
+            display_text = f"{key}: {value}"
+            self.irc_client_gui.update_server_feedback_text(display_text)
 
     def handle_353(self, tokens):
         if len(tokens.params) == 4:
@@ -585,10 +619,16 @@ class IRCClient:
 
             with self.user_list_lock:
                 if channel in self.user_list:
-                    similar_users = [user for user in self.user_list[channel] if user == quit_user or user.startswith('@' + quit_user) or user.startswith('+' + quit_user)]
+                    similar_users = [user for user in self.user_list[channel] 
+                                     if user == quit_user or 
+                                     user.startswith('@' + quit_user) or 
+                                     user.startswith('+' + quit_user)]
                     for user in similar_users:
                         self.user_list[channel].remove(user)
-                    self.irc_client_gui.update_user_list(channel)
+                    # Only update the GUI if the affected channel is the current channel
+                    if channel == self.irc_client_gui.current_channel:
+                        self.irc_client_gui.update_user_list(channel)
+
         self.server_feedback_buffer += raw_message + "\n"
         self.irc_client_gui.update_server_feedback_text(raw_message)
 
@@ -596,10 +636,10 @@ class IRCClient:
         if tokens.source is not None:
             join_user = tokens.hostmask.nickname
             channel = tokens.params[0]
-            
+
             if join_user in self.friend_list:
                 self.friend_online(channel, join_user)
-            
+
             with self.user_list_lock:
                 if channel in self.user_list:
                     if join_user not in self.user_list[channel]:
@@ -607,18 +647,22 @@ class IRCClient:
                     else:
                         self.user_list[channel].remove(join_user)
                         self.user_list[channel].append(join_user)  # Ensure the user is at the end of the list
-                    self.irc_client_gui.update_user_list(channel)
+                    # Only update the GUI if the affected channel is the current channel
+                    if channel == self.irc_client_gui.current_channel:
+                        self.irc_client_gui.update_user_list(channel)
                 else:
                     self.user_list[channel] = [join_user]
-                    self.irc_client_gui.update_user_list(channel)
-        
+                    # Only update the GUI if the affected channel is the current channel
+                    if channel == self.irc_client_gui.current_channel:
+                        self.irc_client_gui.update_user_list(channel)
+
         self.server_feedback_buffer += raw_message + "\n"
         self.irc_client_gui.update_server_feedback_text(raw_message)
 
     def handle_quit_command(self, tokens, raw_message):
         if tokens.source is not None:
             quit_user = tokens.hostmask.nickname
-            
+
             with self.user_list_lock:
                 for channel in self.user_list:
                     similar_users = [user for user in self.user_list[channel] 
@@ -627,9 +671,34 @@ class IRCClient:
                                      user.startswith('+' + quit_user)]
                     for user in similar_users:
                         self.user_list[channel].remove(user)
-                    self.irc_client_gui.update_user_list(channel)
-        
+                    # Only update the GUI if the affected channel is the current channel
+                    if channel == self.irc_client_gui.current_channel:
+                        self.irc_client_gui.update_user_list(channel)
+
         self.server_feedback_buffer += raw_message + "\n"
+        self.irc_client_gui.update_server_feedback_text(raw_message)
+
+    def handle_nick_change(self, old_nickname, new_nickname, channel, raw_message):
+        # Display the nick change message in the chat window
+        nick_change_message_content = f"{old_nickname} has changed their nickname to {new_nickname}"
+        self.irc_client_gui.display_message_in_chat(nick_change_message_content)
+        
+        # Update internal user lists to reflect the nickname change
+        with self.user_list_lock:
+            for chan, users in self.user_list.items():
+                if old_nickname in users:
+                    users.remove(old_nickname)
+                    users.append(new_nickname)
+                elif "@" + old_nickname in users:
+                    users.remove("@" + old_nickname)
+                    users.append("@" + new_nickname)
+                elif "+" + old_nickname in users:
+                    users.remove("+" + old_nickname)
+                    users.append("+" + new_nickname)
+        
+        if channel == self.irc_client_gui.current_channel:
+            self.irc_client_gui.update_user_list(channel)
+            
         self.irc_client_gui.update_server_feedback_text(raw_message)
 
     def handle_privmsg(self, tokens, timestamp):
@@ -830,7 +899,8 @@ class IRCClient:
             if "+" + user in self.user_list[channel]:
                 self.user_list[channel].remove("+" + user)
                 self.user_list[channel].append(user)
-        self.irc_client_gui.update_user_list(channel)
+        if channel == self.irc_client_gui.current_channel:
+            self.irc_client_gui.update_user_list(channel)
 
     def trigger_beep_notification(self, channel_name=None, title="Ping", message="You've been pinged!"):
         """
@@ -984,6 +1054,7 @@ class IRCClientGUI:
         self.channels_with_mentions = []
         self.channels_with_activity = []
         self.nickname_colors = {}
+        self.current_channel = None
 
         self.current_config = self.load_config()
 
@@ -1073,6 +1144,7 @@ class IRCClientGUI:
         index = self.joined_channels_text.index("@%d,%d" % (event.x, event.y))
         line_num = int(index.split(".")[0])
         selection = self.joined_channels_text.get(f"{line_num}.0", f"{line_num}.end").strip()
+        self.current_channel = selection
 
         # Clear the main chat window
         self.clear_chat_window()
@@ -1165,7 +1237,7 @@ class IRCClientGUI:
                     return
                 if target_user not in self.irc_client.dm_users:
                     self.irc_client.dm_users.append(target_user)
-                    self.update_message_text(f"DM opened with {target_user}. Type your messages in the input box.\r\n")
+                    self.update_message_text(f"DM opened with {target_user}.\r\n")
                     self.update_joined_channels_list("DM: " + target_user) 
                 else:
                     self.update_message_text(f"You already have a DM opened with {target_user}.\r\n")
@@ -1437,6 +1509,7 @@ class IRCClientGUI:
         """
         This is responsible for updating the user list within the GUI.
         """
+        current_position = self.user_list_text.yview()
         if channel in self.irc_client.user_list:
             users = self.irc_client.user_list[channel]
 
@@ -1451,6 +1524,7 @@ class IRCClientGUI:
         self.user_list_text.delete(1.0, tk.END)
         self.user_list_text.insert(tk.END, user_list_text)
         self.user_list_text.config(state=tk.DISABLED)
+        self.user_list_text.yview_moveto(current_position[0])
 
     def update_joined_channels_list(self, channel):
         """
