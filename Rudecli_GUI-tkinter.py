@@ -743,7 +743,7 @@ class IRCClient:
         if sender in self.ignore_list:  # ignore based on nick
             return
         if self.nickname in message_content:
-            self.trigger_beep_notification(channel_name=target, title="Ping", message="You've been pinged!")
+            self.trigger_beep_notification(channel_name=target, message_content=message_content)
             if target not in self.irc_client_gui.channels_with_mentions:
                 self.irc_client_gui.channels_with_mentions.append(target)
                 self.irc_client_gui.update_joined_channels_list(target)
@@ -902,15 +902,10 @@ class IRCClient:
         if channel == self.irc_client_gui.current_channel:
             self.irc_client_gui.update_user_list(channel)
 
-    def trigger_beep_notification(self, channel_name=None, title="Ping", message="You've been pinged!"):
+    def trigger_beep_notification(self, channel_name=None, message_content=None):
         """
-        You've been pinged! Plays a beep or noise on mention and shows a system notification
+        You've been pinged! Plays a beep or noise on mention.
         """
-        if channel_name:
-            # Ensure channel_name is a string and replace problematic characters
-            channel_name = str(channel_name).replace("#", "channel ")
-            title = f"{title} from {channel_name}"
-
         if sys.platform.startswith("linux"):
             # Linux-specific notification sound using paplay
             sound_path = os.path.join(os.getcwd(), "Sounds", "Notification4.wav")
@@ -929,14 +924,9 @@ class IRCClient:
             print("Beep notification not supported on this platform.")
 
         try:
-            # Desktop Notification
-            notification.notify(
-                title=title,
-                message=message,
-                timeout=5,  # seconds
-            )
+            self.irc_client_gui.trigger_desktop_notification(channel_name, message_content=message_content)
         except Exception as e:
-            print(f"Desktop notification error: {e}")
+            print(f"Error triggering desktop notification: {e}")
 
     def sanitize_channel_name(self, channel):
         #gotta remove any characters that are not alphanumeric or allowed special characters
@@ -1133,6 +1123,39 @@ class IRCClientGUI:
     def open_config_window(self):
         config_window = ConfigWindow(self.current_config)
         config_window.mainloop()
+
+    def trigger_desktop_notification(self, channel_name=None, title="Ping", message_content=None):
+        """
+        Show a system desktop notification.
+        """
+        # Check if the application window is the active window
+        if self.is_app_focused():  # If the app is focused, return early
+            return
+
+        if channel_name:
+            # Ensure channel_name is a string and replace problematic characters
+            channel_name = str(channel_name).replace("#", "channel ")
+            title = f"{title} from {channel_name}"
+            if message_content:
+                message = f"{channel_name}: {message_content}"
+            else:
+                message = f"You've been pinged in {channel_name}!"
+
+        icon_path = os.path.join(os.getcwd(), "rude.png")
+
+        try:
+            # Desktop Notification
+            notification.notify(
+                title=title,
+                message=message,
+                app_icon=icon_path,  
+                timeout=3,  
+            )
+        except Exception as e:
+            print(f"Desktop notification error: {e}")
+
+    def is_app_focused(self):
+        return bool(self.root.focus_displayof())
 
     def load_config(self):
         config = configparser.ConfigParser()
