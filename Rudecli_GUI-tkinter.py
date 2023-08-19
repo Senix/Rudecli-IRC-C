@@ -33,6 +33,7 @@ import random
 import re
 import socket
 import ssl
+import subprocess
 import sys
 import threading
 import time
@@ -111,6 +112,23 @@ class IRCClient:
         """
         Connect to the IRC server
         """
+        clover_art = """
+    ,-.----.                                       ,----..    ,---,                   ___     
+    \    /  \                     ,---,           /   /   \ ,--.' |                 ,--.'|_   
+    ;   :    \          ,--,    ,---.'|          |   :     :|  |  :                 |  | :,'  
+    |   | .\ :        ,'_ /|    |   | :          .   |  ;. /:  :  :                 :  : ' :  
+    .   : |: |   .--. |  | :    |   | |   ,---.  .   ; /--` :  |  |,--.  ,--.--.  .;__,'  /   
+    |   |  \ : ,'_ /| :  . |  ,--.__| |  /     \ ;   | ;    |  :  '   | /       \ |  |   |    
+    |   : .  / |  ' | |  . . /   ,'   | /    /  |.   | '___ '  :  | | :.--.  .-. |:__,'| :    
+    ;   | |  \ |  | ' |  | |.   '  /  |.    ' / |'   ; : .'||  |  ' | : ," .--.; |  '  : |__  
+    |   | ;\  \:  | : ;  ; |'   ; |:  |'   ;   /|'   | '/  :|  :  :_:,'/  /  ,.  |  |  | '.'| 
+    :   ' | \.''  :  `--'   \   | '/  ''   |  / |'   :    / |  | ,'   ;  :   .'   \ |  ,   /  
+    :   : :-'  :  ,      .-./   :    :||   :    ||   :    /  \   \ .'  `--`---'             
+    |   |.'     `--`----'    \   \  /   \   \  /  \   \ .'  `--''     |  ,     .-./  ---`-'   
+    `---'                     `----'     `----'    `---`               `--`---'               
+    \r\n
+    """
+
         print(f'Connecting to server: {self.server}:{self.port}')
 
         if self.ssl_enabled:
@@ -132,6 +150,7 @@ class IRCClient:
         self.irc.send(bytes(f'USER {self.nickname} 0 * :{self.nickname}\r\n', 'UTF-8'))
         print(f'Connected to server: {self.server}:{self.port}')
         self.irc_client_gui.update_message_text(f'Connected to server: {self.server}:{self.port}\n')
+        self.irc_client_gui.update_message_text(clover_art)
 
     def disconnect(self):
         """
@@ -809,7 +828,7 @@ class IRCClient:
 
         elif ctcp_command == "FINGER":
             # Respond to FINGER request (customize as per requirement)
-            version_data = "IRishC v1.9"
+            version_data = "RudeChat 2.0-5"
             finger_reply = f"\x01FINGER User: {self.nickname}, {self.server}, {version_data}\x01"
             self.send_message(f'NOTICE {sender} :{finger_reply}')
 
@@ -1045,12 +1064,14 @@ class IRCClientGUI:
         self.channels_with_activity = []
         self.nickname_colors = {}
         self.current_channel = None
+        self.ASCII_ART_DIRECTORY = os.path.join(os.getcwd(), "Art")
+        self.ASCII_ART_MACROS = self.load_ascii_art_macros()
 
         self.current_config = self.load_config()
 
         self.root = tk.Tk()
-        self.root.title("RudeGUI-IRC-C")
-        self.root.geometry("1200x600")
+        self.root.title("RudeChat")
+        self.root.geometry("1200x800")
         self.icon_image = tk.PhotoImage(file=os.path.join(os.getcwd(), "rude.png"))
         self.root.iconphoto(True, self.icon_image)
         self.selected_channel = None
@@ -1153,6 +1174,16 @@ class IRCClientGUI:
             )
         except Exception as e:
             print(f"Desktop notification error: {e}")
+
+    def load_ascii_art_macros(self):
+        """Load ASCII art from files into a dictionary."""
+        ascii_macros = {}
+        for file in os.listdir(self.ASCII_ART_DIRECTORY):
+            if file.endswith(".txt"):
+                with open(os.path.join(self.ASCII_ART_DIRECTORY, file), 'r') as f:
+                    macro_name, _ = os.path.splitext(file) 
+                    ascii_macros[macro_name] = f.read()
+        return ascii_macros
 
     def is_app_focused(self):
         return bool(self.root.focus_displayof())
@@ -1383,9 +1414,38 @@ class IRCClientGUI:
                 parameter = ' '.join(args[3:]) if len(args) > 3 else None
                 self.irc_client.send_ctcp_request(target, ctcp_command, parameter)
                 self.input_entry.delete(0, tk.END)
-            case "rat": #rat
+            case "mac":
+                if len(args) < 2:
+                    available_macros = ", ".join(self.ASCII_ART_MACROS.keys())
+                    self.update_message_text(f"Available ASCII art macros: {available_macros}\r\n")
+                    self.update_message_text("Usage: /mac <macro_name>\r\n")
+                    self.input_entry.delete(0, tk.END)
+                    return
+
+                macro_name = args[1]
+                if macro_name in self.ASCII_ART_MACROS:
+                    # Send the ASCII art to the current channel line by line
+                    for line in self.ASCII_ART_MACROS[macro_name].splitlines():
+                        self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                        time.sleep(0.2)  # Introduce a delay of 0.5 seconds between sending each line
+                    # Display the ASCII art in the client GUI
+                    self.update_message_text(self.ASCII_ART_MACROS[macro_name] + "\r\n")
+                else:
+                    self.update_message_text(f"Unknown ASCII art macro: {macro_name}. Type '/mac' to see available macros.\r\n")
                 self.input_entry.delete(0, tk.END)
-                self.input_entry.insert(0, "~~,=,^>")
+            case "cowsay":
+                try:
+                    result = subprocess.check_output("fortune | cowsay", shell=True).decode('utf-8')
+                    for line in result.split("\n"):
+                        # Skip empty or whitespace-only lines
+                        if not line.strip():
+                            continue
+                        self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                        time.sleep(0.2) 
+                        self.update_message_text(line + "\r\n")
+                except Exception as e:
+                    self.update_message_text(f"Error executing cowsay: {e}\r\n")
+                self.input_entry.delete(0, tk.END)
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
 
@@ -1394,7 +1454,7 @@ class IRCClientGUI:
         self.update_message_text("=== General Commands ===\r\n")
         self.update_message_text(f'/help - Display this help menu\r\n')
         self.update_message_text(f'/clear - Clear the chat window\r\n')
-        self.update_message_text(f'/rat - To rat ~~,=,^>\r\n')
+        self.update_message_text(f'/mac to see available macros /mac <macroname> sends that macro\r\n')
         self.update_message_text(f'Exit button - Send /quit and close client\r\n')
         self.update_message_text(f'Tab - Auto-complete nicknames\r\n')
 
@@ -1426,66 +1486,41 @@ class IRCClientGUI:
         #advanced commands
         self.update_message_text("\r\n=== Advanced Commands ===\r\n")
         self.update_message_text(f'/CTCP <nickname> <command> [parameters] - CTCP command, e.g., /CTCP Rudie CLIENTINFO\r\n')
+        self.update_message_text(f'/cowsay to generate and send a cowsay to the channel\r\n')
+        self.update_message_text(f'cowsay only works if you have both fortune and cowsay installedr\n')
 
     def format_message_for_display(self, message):
-        """
-        Processes an IRC message and applies bold and italic formatting for tkinter's Text widget.
-        """
-        
         # Remove color codes
         message = re.sub(r'\x03(\d{1,2}(,\d{1,2})?)?', '', message)
-        formatted_message = ""
-        bold_ranges = []  # List to keep track of the start and end positions for bold text
-        italic_ranges = []  # List to keep track of the start and end positions for italic text
-        bold_italic_ranges = []  # List to keep track of positions for combined bold and italic text
         
-        in_bold = False
-        in_italic = False
-        start_bold = None
-        start_italic = None
+        # Define patterns for bold, italic, and reset
+        bold_pattern = r'\x02(.*?)\x02|\x02(.*?)\x0F'
+        italic_pattern = r'\x1D(.*?)\x1D|\x1D(.*?)\x0F'
         
-        for i, char in enumerate(message):
-            if char == '\x02':  # ASCII for bold
-                if in_bold:
-                    bold_ranges.append((start_bold, i))
-                    in_bold = False
-                else:
-                    start_bold = i
-                    in_bold = True
-            
-            elif char == '\x1D':  # ASCII for italics
-                if in_italic:
-                    italic_ranges.append((start_italic, i))
-                    in_italic = False
-                else:
-                    start_italic = i
-                    in_italic = True
-            
-            elif char == '\x0F':  # ASCII for reset formatting
-                if in_bold:
-                    bold_ranges.append((start_bold, i))
-                    in_bold = False
-                if in_italic:
-                    italic_ranges.append((start_italic, i))
-                    in_italic = False
-            
-            if in_bold and in_italic:  # If both are active, it's bold-italic
-                bold_italic_ranges.append((start_bold, i))
-                start_bold = None
-                start_italic = None
-                in_bold = False
-                in_italic = False
-            
-            # Add the character to the formatted message
-            if char not in ['\x02', '\x1D', '\x0F']:
-                formatted_message += char
+        # Function to extract ranges from matches
+        def get_ranges(pattern, msg):
+            ranges = []
+            for match in re.finditer(pattern, msg):
+                start = match.start()
+                end = match.end()
+                for group in match.groups():
+                    if group is not None:
+                        end = start + len(group) + 2  # +2 to account for the format chars
+                        ranges.append((start, end - 1))
+                        break
+            return ranges
 
-        # If the message ends while still in bold or italic, add the final range
-        if in_bold:
-            bold_ranges.append((start_bold, len(formatted_message)))
-        if in_italic:
-            italic_ranges.append((start_italic, len(formatted_message)))
+        bold_ranges = get_ranges(bold_pattern, message)
+        italic_ranges = get_ranges(italic_pattern, message)
+        
+        # For bold-italic, we'll look for overlapping ranges
+        bold_italic_ranges = [(b_start, b_end) for b_start, b_end in bold_ranges 
+                              for i_start, i_end in italic_ranges 
+                              if b_start <= i_start and b_end >= i_end]
 
+        # Remove the formatting characters to get the formatted message
+        formatted_message = re.sub(r'[\x02\x1D\x0F]', '', message)
+        
         return formatted_message, bold_ranges, italic_ranges, bold_italic_ranges
 
     def display_dm_messages(self, user):
@@ -1662,9 +1697,9 @@ class IRCClientGUI:
         if channel_name:
             title_parts.append(channel_name)
         if title_parts:
-            self.root.title("Rude GUI " + " | ".join(title_parts))
+            self.root.title("RudeChat " + " | ".join(title_parts))
         else:
-            self.root.title("Rude GUI ")
+            self.root.title("RudeChat ")
 
         self.nickname_label.config(font=("Hack", 9, "bold italic"), text=f"{channel_name} $ {nickname} $> ")
 
@@ -1674,117 +1709,123 @@ class IRCClientGUI:
         """
         def _update_message_text():
             self.message_text.config(state=tk.NORMAL)
-            
+                
             # Process the message for bold, italic, and bold-italic formatting
             formatted_text, bold_ranges, italic_ranges, bold_italic_ranges = self.format_message_for_display(text)
-            
+                
             # Remove trailing '\r' characters from each line
             cleaned_formatted_text = "\n".join([line.rstrip('\r') for line in formatted_text.split('\n')])
-            
+
+            start_insert_index = self.message_text.index(tk.END)
+
             self.message_text.insert(tk.END, cleaned_formatted_text)
+            
+            self._apply_formatting(cleaned_formatted_text, bold_ranges, italic_ranges, bold_italic_ranges, start_insert_index)
+                
             self.message_text.config(state=tk.DISABLED)
             self.message_text.see(tk.END)
 
-            # Apply bold formatting
-            self.message_text.tag_configure("bold", font=("Hack", 10, "bold"))
-            for start, end in bold_ranges:
-                start_idx = f"{start + 1}.0"
-                end_idx = f"{end + 1}.0"
-                self.message_text.tag_add("bold", start_idx, end_idx)
+        self.root.after(0, _update_message_text)
+        
+    def _apply_formatting(self, cleaned_formatted_text, bold_ranges, italic_ranges, bold_italic_ranges, start_insert_index):
 
-            # Apply italic formatting
-            self.message_text.tag_configure("italic", font=("Hack", 10, "italic"))
-            for start, end in italic_ranges:
-                start_idx = f"{start + 1}.0"
-                end_idx = f"{end + 1}.0"
-                self.message_text.tag_add("italic", start_idx, end_idx)
+        # Apply bold, italic, and bold-italic formatting
+        self.message_text.tag_configure("bold", font=("TkDefaultFont", 10 , "bold"))
+        self.message_text.tag_configure("italic", font=("TkDefaultFont", 10, "italic"))
+        self.message_text.tag_configure("bold_italic", font=("TkDefaultFont", 10, "bold", "italic"))
+            
+        for start, end in bold_ranges:
+            start_idx = f"{start_insert_index}+{start}c"
+            end_idx = f"{end + 1}.0"
+            self.message_text.tag_add("bold", start_idx, end_idx)
 
-            # Apply bold-italic formatting
-            self.message_text.tag_configure("bold_italic", font=("Hack", 10, "bold italic"))
-            for start, end in bold_italic_ranges:
-                start_idx = f"{start + 1}.0"
-                end_idx = f"{end + 1}.0"
-                self.message_text.tag_add("bold_italic", start_idx, end_idx)
+        for start, end in italic_ranges:
+            start_idx = f"{start_insert_index}+{start}c"
+            end_idx = f"{end + 1}.0"
+            self.message_text.tag_add("italic", start_idx, end_idx)
+            
+        for start, end in bold_italic_ranges:
+            start_idx = f"{start_insert_index}+{start}c"
+            end_idx = f"{end + 1}.0"
+            self.message_text.tag_add("bold_italic", start_idx, end_idx)
 
-            # apply #C0FFEE text color
-            self.message_text.tag_configure("brightgreen", foreground="#C0FFEE")
-            self.message_text.tag_add("brightgreen", "1.0", "end")
+        # Process nicknames and color them
+        start_idx = "1.0"
+        while True:
+            # Find the opening '<'
+            start_idx = self.message_text.search('<', start_idx, stopindex=tk.END)
+            if not start_idx:
+                break
+            # Find the closing '>' ensuring no newlines between
+            end_idx = self.message_text.search('>', start_idx, f"{start_idx} lineend")
+            if end_idx:
+                end_idx = f"{end_idx}+1c"  # Include the '>' character
+                # Extract the nickname
+                nickname = self.message_text.get(start_idx + "+1c", end_idx + "-1c")
 
-            # Process nicknames and color them
+                # If nickname doesn't have an assigned color, generate one
+                if nickname not in self.nickname_colors:
+                    self.nickname_colors[nickname] = self.generate_random_color()
+                nickname_color = self.nickname_colors[nickname]
+
+                # If it's the main user's nickname, set color to green
+                if nickname == self.irc_client.nickname:
+                    nickname_color = "#00ff62"
+
+                self.message_text.tag_configure(f"nickname_{nickname}", foreground=nickname_color)
+                self.message_text.tag_add(f"nickname_{nickname}", start_idx, end_idx)
+                start_idx = end_idx
+            else:
+                start_idx = f"{start_idx}+1c"
+
+        main_user_name = self.irc_client.nickname
+        start_idx = "1.0"
+        while True:
+            start_idx = self.message_text.search(main_user_name, start_idx, stopindex=tk.END)
+            if not start_idx:
+                break
+            end_idx = f"{start_idx}+{len(main_user_name)}c"
+            self.message_text.tag_configure("main_user_color", foreground="#00ff62")
+            self.message_text.tag_add("main_user_color", start_idx, end_idx)
+            start_idx = end_idx
+
+            # Check if the start index has reached the end of the text
+            if start_idx == tk.END:
+                break
+
+        urls = self.find_urls(cleaned_formatted_text)
+        for url in urls:
+            # Mark found URLs in the text to avoid them being treated as channels
+            cleaned_formatted_text = cleaned_formatted_text.replace(url, f"<URL>{url}</URL>")
+            start_idx = self.message_text.search(url, "1.0", tk.END)
+            if start_idx:
+                end_idx = f"{start_idx}+{len(url)}c"
+                self.message_text.tag_add("url", start_idx, end_idx)
+                self.message_text.tag_configure("url", foreground="blue", underline=1)
+                self.message_text.tag_bind("url", "<Button-1>", lambda e, url=url: self.open_url(url))
+
+        channels = self.find_channels(cleaned_formatted_text)
+        for channel in channels:
             start_idx = "1.0"
             while True:
-                # Find the opening '<'
-                start_idx = self.message_text.search('<', start_idx, stopindex=tk.END)
+                # Search for the channel from the current start index
+                start_idx = self.message_text.search(channel, start_idx, stopindex=tk.END)
                 if not start_idx:
                     break
-                # Find the closing '>' ensuring no newlines between
-                end_idx = self.message_text.search('>', start_idx, f"{start_idx} lineend")
-                if end_idx:
-                    end_idx = f"{end_idx}+1c"  # Include the '>' character
-                    # Extract the nickname
-                    nickname = self.message_text.get(start_idx + "+1c", end_idx + "-1c")
-
-                    # If nickname doesn't have an assigned color, generate one
-                    if nickname not in self.nickname_colors:
-                        self.nickname_colors[nickname] = self.generate_random_color()
-                    nickname_color = self.nickname_colors[nickname]
-
-                    # If it's the main user's nickname, set color to green
-                    if nickname == self.irc_client.nickname:
-                        nickname_color = "#00ff62"
-
-                    self.message_text.tag_configure(f"nickname_{nickname}", foreground=nickname_color)
-                    self.message_text.tag_add(f"nickname_{nickname}", start_idx, end_idx)
-                    start_idx = end_idx
-                else:
-                    start_idx = f"{start_idx}+1c"
-
-            main_user_name = self.irc_client.nickname
-            start_idx = "1.0"
-            while True:
-                start_idx = self.message_text.search(main_user_name, start_idx, stopindex=tk.END)
-                if not start_idx:
-                    break
-                end_idx = f"{start_idx}+{len(main_user_name)}c"
-                self.message_text.tag_configure("main_user_color", foreground="#00ff62")
-                self.message_text.tag_add("main_user_color", start_idx, end_idx)
+                end_idx = f"{start_idx}+{len(channel)}c"
+                
+                # Ensure we're not treating marked URLs as channels
+                if "<URL>" not in self.message_text.get(start_idx, end_idx) and "</URL>" not in self.message_text.get(start_idx, end_idx):
+                    self.message_text.tag_add("channel", start_idx, end_idx)
+                    self.message_text.tag_configure("channel", foreground="cyan", underline=1)
+                    self.message_text.tag_bind("channel", "<Button-1>", lambda e, channel=channel: self.join_channel(channel))
+                
+                # Move the start index to after the current found channel to continue the search
                 start_idx = end_idx
 
-                # Check if the start index has reached the end of the text
-                if start_idx == tk.END:
-                    break
-
-            urls = self.find_urls(cleaned_formatted_text)
-            for url in urls:
-                # Mark found URLs in the text to avoid them being treated as channels
-                cleaned_formatted_text = cleaned_formatted_text.replace(url, f"<URL>{url}</URL>")
-                start_idx = self.message_text.search(url, "1.0", tk.END)
-                if start_idx:
-                    end_idx = f"{start_idx}+{len(url)}c"
-                    self.message_text.tag_add("url", start_idx, end_idx)
-                    self.message_text.tag_configure("url", foreground="blue", underline=1)
-                    self.message_text.tag_bind("url", "<Button-1>", lambda e, url=url: self.open_url(url))
-
-            channels = self.find_channels(cleaned_formatted_text)
-            for channel in channels:
-                start_idx = "1.0"
-                while True:
-                    # Search for the channel from the current start index
-                    start_idx = self.message_text.search(channel, start_idx, stopindex=tk.END)
-                    if not start_idx:
-                        break
-                    end_idx = f"{start_idx}+{len(channel)}c"
-                    
-                    # Ensure we're not treating marked URLs as channels
-                    if "<URL>" not in self.message_text.get(start_idx, end_idx) and "</URL>" not in self.message_text.get(start_idx, end_idx):
-                        self.message_text.tag_add("channel", start_idx, end_idx)
-                        self.message_text.tag_configure("channel", foreground="cyan", underline=1)
-                        self.message_text.tag_bind("channel", "<Button-1>", lambda e, channel=channel: self.join_channel(channel))
-                    
-                    # Move the start index to after the current found channel to continue the search
-                    start_idx = end_idx
-
-        self.root.after(0, _update_message_text)
+        # apply #C0FFEE text color
+        self.message_text.tag_configure("brightgreen", foreground="#C0FFEE")
+        self.message_text.tag_add("brightgreen", "1.0", "end")
 
     def display_channel_messages(self):
         """
@@ -2005,7 +2046,7 @@ class ConfigWindow(tk.Toplevel):
         self.destroy()
 
 def main():
-    """The Main Function for the RudeGUI IRC Client."""
+    """The Main Function for the RudeChat IRC Client."""
     config_file = 'conf.rude'
 
     irc_client = IRCClient()
