@@ -1236,9 +1236,9 @@ class IRCClientGUI:
         self.message_text.config(state=tk.DISABLED)
 
     def generate_random_color(self):
-        return "#{:02x}{:02x}{:02x}".format(random.randint(0, 255), 
-                                           random.randint(0, 255), 
-                                           random.randint(0, 255))
+        return "#{:02x}{:02x}{:02x}".format(random.randint(50, 255), 
+                                           random.randint(50, 255), 
+                                           random.randint(50, 255))
 
     def handle_input(self, event):
         """
@@ -1415,39 +1415,84 @@ class IRCClientGUI:
                 self.irc_client.send_ctcp_request(target, ctcp_command, parameter)
                 self.input_entry.delete(0, tk.END)
             case "mac":
-                if len(args) < 2:
-                    available_macros = ", ".join(self.ASCII_ART_MACROS.keys())
-                    self.update_message_text(f"Available ASCII art macros: {available_macros}\r\n")
-                    self.update_message_text("Usage: /mac <macro_name>\r\n")
-                    self.input_entry.delete(0, tk.END)
-                    return
-
-                macro_name = args[1]
-                if macro_name in self.ASCII_ART_MACROS:
-                    # Send the ASCII art to the current channel line by line
-                    for line in self.ASCII_ART_MACROS[macro_name].splitlines():
-                        self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
-                        time.sleep(0.2)  # Introduce a delay of 0.5 seconds between sending each line
-                    # Display the ASCII art in the client GUI
-                    self.update_message_text(self.ASCII_ART_MACROS[macro_name] + "\r\n")
-                else:
-                    self.update_message_text(f"Unknown ASCII art macro: {macro_name}. Type '/mac' to see available macros.\r\n")
-                self.input_entry.delete(0, tk.END)
+                self.handle_mac_command(args)
             case "cowsay":
-                try:
-                    result = subprocess.check_output("fortune | cowsay", shell=True).decode('utf-8')
-                    for line in result.split("\n"):
-                        # Skip empty or whitespace-only lines
-                        if not line.strip():
-                            continue
-                        self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
-                        time.sleep(0.2) 
-                        self.update_message_text(line + "\r\n")
-                except Exception as e:
-                    self.update_message_text(f"Error executing cowsay: {e}\r\n")
-                self.input_entry.delete(0, tk.END)
+                self.handle_cowsay_command(args)
+            case "fortune":
+                self.handle_fortune_command(args[1:])
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
+
+    def handle_mac_command(self, args):
+        if len(args) < 2:
+            available_macros = ", ".join(self.ASCII_ART_MACROS.keys())
+            self.update_message_text(f"Available ASCII art macros: {available_macros}\r\n")
+            self.update_message_text("Usage: /mac <macro_name>\r\n")
+            self.input_entry.delete(0, tk.END)
+            return
+
+        macro_name = args[1]
+        if macro_name in self.ASCII_ART_MACROS:
+            current_time = datetime.datetime.now().strftime('%H:%M:%S')
+            for line in self.ASCII_ART_MACROS[macro_name].splitlines():
+                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                time.sleep(0.5)
+                formatted_line = f"[{current_time}]  <{self.irc_client.nickname}> {line}\r\n"
+                self.update_message_text(formatted_line)
+        else:
+            self.update_message_text(f"Unknown ASCII art macro: {macro_name}. Type '/mac' to see available macros.\r\n")
+        self.input_entry.delete(0, tk.END)
+
+    def handle_cowsay_command(self, args):
+        import shlex
+        try:
+            # If the user provided multiple arguments after /cowsay
+            if len(args) > 2:
+                message = ' '.join(args[1:])
+            elif len(args) == 2:
+                # If the user provided only a single argument, treat it as a category for fortune
+                category = args[1]
+                message = subprocess.check_output(f"fortune -as {shlex.quote(category)}", shell=True).decode('utf-8').strip()
+            else:
+                # If the user just entered /cowsay without any additional arguments, use fortune with default settings
+                message = subprocess.check_output("fortune -as", shell=True).decode('utf-8').strip()
+
+            # Use the message with cowsay
+            result = subprocess.check_output(f"echo {shlex.quote(message)} | cowsay -W 100 -s", shell=True).decode('utf-8')
+
+            for line in result.split("\n"):
+                if not line.strip():
+                    continue
+
+                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                time.sleep(0.3)
+
+                current_time = datetime.datetime.now().strftime('%H:%M:%S')
+                formatted_line = f"[{current_time}]  <{self.irc_client.nickname}> {line}"
+                self.update_message_text(formatted_line + "\r\n")
+        except Exception as e:
+            self.update_message_text(f"Error executing cowsay: {e}\r\n")
+        self.input_entry.delete(0, tk.END)
+
+    def handle_fortune_command(self, args=[]):
+        import shlex
+        try:
+            # Build the fortune command with the given arguments.
+            # We use shlex.quote to safely escape any argument passed to the command.
+            fortune_args = ' '.join(shlex.quote(arg) for arg in args)
+            command = f"fortune -as {fortune_args}"
+            result = subprocess.check_output(command, shell=True).decode('utf-8')
+            
+            for line in result.split("\n"):
+                if not line.strip():
+                    continue
+                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                current_time = datetime.datetime.now().strftime('%H:%M:%S')
+                formatted_line = f"[{current_time}]  <{self.irc_client.nickname}> {line}"
+                self.update_message_text(formatted_line + "\r\n")
+        except Exception as e:
+            self.update_message_text(f"Error executing fortune: {e}\r\n")
+        self.input_entry.delete(0, tk.END)
 
     def display_help(self):
         #general commands
@@ -1487,7 +1532,8 @@ class IRCClientGUI:
         self.update_message_text("\r\n=== Advanced Commands ===\r\n")
         self.update_message_text(f'/CTCP <nickname> <command> [parameters] - CTCP command, e.g., /CTCP Rudie CLIENTINFO\r\n')
         self.update_message_text(f'/cowsay to generate and send a cowsay to the channel\r\n')
-        self.update_message_text(f'cowsay only works if you have both fortune and cowsay installedr\n')
+        self.update_message_text(f'/fortune to tell fortune. /fortune <library> gives a fortune from that library\r\n')
+        self.update_message_text(f'cowsay & fortune will only work if you have both fortune and cowsay installed\r\n')
 
     def format_message_for_display(self, message):
         # Remove color codes
@@ -1728,27 +1774,6 @@ class IRCClientGUI:
         self.root.after(0, _update_message_text)
         
     def _apply_formatting(self, cleaned_formatted_text, bold_ranges, italic_ranges, bold_italic_ranges, start_insert_index):
-
-        # Apply bold, italic, and bold-italic formatting
-        self.message_text.tag_configure("bold", font=("TkDefaultFont", 10 , "bold"))
-        self.message_text.tag_configure("italic", font=("TkDefaultFont", 10, "italic"))
-        self.message_text.tag_configure("bold_italic", font=("TkDefaultFont", 10, "bold", "italic"))
-            
-        for start, end in bold_ranges:
-            start_idx = f"{start_insert_index}+{start}c"
-            end_idx = f"{end + 1}.0"
-            self.message_text.tag_add("bold", start_idx, end_idx)
-
-        for start, end in italic_ranges:
-            start_idx = f"{start_insert_index}+{start}c"
-            end_idx = f"{end + 1}.0"
-            self.message_text.tag_add("italic", start_idx, end_idx)
-            
-        for start, end in bold_italic_ranges:
-            start_idx = f"{start_insert_index}+{start}c"
-            end_idx = f"{end + 1}.0"
-            self.message_text.tag_add("bold_italic", start_idx, end_idx)
-
         # Process nicknames and color them
         start_idx = "1.0"
         while True:
