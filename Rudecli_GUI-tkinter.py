@@ -204,36 +204,40 @@ class IRCClient:
         # Generate timestamp
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
 
-        # Send to server
-        self.irc.send(bytes(f'{message}\r\n', 'UTF-8'))
+        # Split the message into lines
+        lines = message.split("\n")
 
-        # Extract the target channel and actual message content from the message
-        target_match = re.match(r'PRIVMSG (\S+) :(.+)', message)
-        if target_match:
-            target_channel = target_match.group(1)
-            message_content = target_match.group(2).strip()
+        # Send each line to the server
+        for line in lines:
+            self.irc.send(bytes(f'{line}\r\n', 'UTF-8'))
 
-            # Add the sent message to the channel history
-            if target_channel not in self.channel_messages:
-                self.channel_messages[target_channel] = []
+            # Extract the target channel and actual message content from the line
+            target_match = re.match(r'PRIVMSG (\S+) :(.+)', line)
+            if target_match:
+                target_channel = target_match.group(1)
+                message_content = target_match.group(2)
 
-            # Only store the actual content of the message, not the entire command
-            self.channel_messages[target_channel].append((timestamp, self.nickname, message_content))
+                # Add the sent message to the channel history
+                if target_channel not in self.channel_messages:
+                    self.channel_messages[target_channel] = []
 
-            # If the target is a DM
-            if target_channel not in self.joined_channels:
-                if target_channel not in self.dm_messages:
-                    self.dm_messages[target_channel] = []
-                sent_dm = f"{timestamp} <{self.nickname}> {message_content}\n"
-                self.dm_messages[target_channel].append(sent_dm)
+                # Only store the actual content of the message, not the entire command
+                self.channel_messages[target_channel].append((timestamp, self.nickname, message_content))
 
-            # Check if the message history size exceeds the maximum allowed
-            if len(self.channel_messages[target_channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
-                # If the history exceeds the limit, remove the oldest messages to maintain the limit
-                self.channel_messages[target_channel] = self.channel_messages[target_channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
+                # If the target is a DM
+                if target_channel not in self.joined_channels:
+                    if target_channel not in self.dm_messages:
+                        self.dm_messages[target_channel] = []
+                    sent_dm = f"{timestamp} <{self.nickname}> {message_content}\n"
+                    self.dm_messages[target_channel].append(sent_dm)
 
-            # Log the message with the timestamp for display
-            self.log_message(target_channel, self.nickname, message_content, is_sent=True)
+                # Check if the message history size exceeds the maximum allowed
+                if len(self.channel_messages[target_channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
+                    # If the history exceeds the limit, remove the oldest messages to maintain the limit
+                    self.channel_messages[target_channel] = self.channel_messages[target_channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
+
+                # Log the message with the timestamp for display
+                self.log_message(target_channel, self.nickname, message_content, is_sent=True)
 
     def send_ctcp_request(self, target, command, parameter=None):
         """
@@ -956,18 +960,27 @@ class IRCClient:
         Logs your chats for later use
         """
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Split the message into lines
+        lines = message.split("\n")
+        
+        # Construct the log line
         if is_sent:
-            log_line = f'[{timestamp}] <{self.nickname}> {message}'
+            log_line = f'[{timestamp}] <{self.nickname}> {lines[0]}\n'
         else:
-            log_line = f'[{timestamp}] <{sender}> {message}'
-
+            log_line = f'[{timestamp}] <{sender}> {lines[0]}\n'
+        
+        # Add the subsequent lines without timestamp
+        for line in lines[1:]:
+            log_line += f'           <{sender if is_sent else self.nickname}> {line}\n'
+            
         # Create a folder named "Logs" to store the logs
         logs_directory = 'Logs'
         os.makedirs(logs_directory, exist_ok=True)
 
         filename = f'{logs_directory}/irc_log_{self.sanitize_channel_name(channel)}.txt'
         with open(filename, 'a') as file:
-            file.write(log_line + '\n')
+            file.write(log_line)
 
     def save_friend_list(self):
         """
@@ -1080,6 +1093,7 @@ class IRCClientGUI:
         self.settings_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.menu_bar.add_cascade(label="Settings", menu=self.settings_menu)
         self.settings_menu.add_command(label="Configure", command=self.open_config_window)
+        self.settings_menu.add_command(label="Reload Macros", command=self.reload_ascii_macros)
 
         default_font = self.current_config.get("font_family", "Liberation Mono")
         default_size = int(self.current_config.get("font_size", 10))
@@ -1184,6 +1198,12 @@ class IRCClientGUI:
                     macro_name, _ = os.path.splitext(file) 
                     ascii_macros[macro_name] = f.read()
         return ascii_macros
+
+    def reload_ascii_macros(self):
+        """Clears and reloads the ASCII art macros from files."""
+        self.ASCII_ART_MACROS.clear()  # Clear the current dictionary
+        self.ASCII_ART_MACROS = self.load_ascii_art_macros()
+        self.update_message_text(f'ASCII art macros reloaded!\r\n') 
 
     def is_app_focused(self):
         return bool(self.root.focus_displayof())
@@ -1960,7 +1980,7 @@ class ConfigWindow(tk.Toplevel):
     def __init__(self, current_config):
         super().__init__()
         self.title("Configuration")
-        self.geometry("500x300")
+        self.geometry("500x400")
         self.config_font = tkFont.Font(family="Hack", size=10)
 
         # Labels
@@ -2002,6 +2022,26 @@ class ConfigWindow(tk.Toplevel):
         self.checkbox_ssl = tk.Checkbutton(self, variable=self.entry_ssl)
         self.checkbox_ssl.grid(row=5, column=1, padx=5, pady=5)
 
+        # SASL Configuration
+        label_sasl_enabled = tk.Label(self, text="SASL Enabled:", font=self.config_font)
+        label_sasl_enabled.grid(row=8, column=0, padx=5, pady=5, sticky=tk.W)
+
+        self.entry_sasl_enabled = tk.BooleanVar()
+        self.checkbox_sasl_enabled = tk.Checkbutton(self, variable=self.entry_sasl_enabled)
+        self.checkbox_sasl_enabled.grid(row=8, column=1, padx=5, pady=5)
+
+        label_sasl_username = tk.Label(self, text="SASL Username:", font=self.config_font)
+        label_sasl_username.grid(row=9, column=0, padx=5, pady=5, sticky=tk.W)
+
+        self.entry_sasl_username = tk.Entry(self)
+        self.entry_sasl_username.grid(row=9, column=1, padx=5, pady=5)
+
+        label_sasl_password = tk.Label(self, text="SASL Password:", font=self.config_font)
+        label_sasl_password.grid(row=10, column=0, padx=5, pady=5, sticky=tk.W)
+
+        self.entry_sasl_password = tk.Entry(self, show="*")  # Mask the password with '*'
+        self.entry_sasl_password.grid(row=10, column=1, padx=5, pady=5)
+
         # Font Selection
         label_font = tk.Label(self, text="Font:", font=self.config_font)
         label_font.grid(row=6, column=0, padx=5, pady=5, sticky=tk.W)
@@ -2025,7 +2065,7 @@ class ConfigWindow(tk.Toplevel):
 
         # Save Button
         save_button = tk.Button(self, text="Save Configuration", command=self.save_config)
-        save_button.grid(row=8, column=0, columnspan=2, padx=5, pady=5)
+        save_button.grid(row=11, column=0, columnspan=2, padx=5, pady=5)
 
         # Set the current configuration values in the entry fields
         self.entry_name.insert(0, current_config["nickname"])
@@ -2034,6 +2074,9 @@ class ConfigWindow(tk.Toplevel):
         self.entry_password.insert(0, current_config["nickserv_password"])
         self.entry_port.insert(0, current_config["port"])
         self.entry_ssl.set(current_config["ssl_enabled"])
+        self.entry_sasl_enabled.set(current_config.get("sasl_enabled", False))
+        self.entry_sasl_username.insert(0, current_config.get("sasl_username", ""))
+        self.entry_sasl_password.insert(0, current_config.get("sasl_password", ""))
 
     def update_font(self, font_choice):
         """Updates the font when the user selects a new font from the dropdown."""
@@ -2049,6 +2092,11 @@ class ConfigWindow(tk.Toplevel):
         password = self.entry_password.get()
         port = self.entry_port.get()
         ssl_enabled = self.entry_ssl.get()
+        # Get SASL configurations from the entry fields
+        sasl_enabled = self.entry_sasl_enabled.get()
+        sasl_username = self.entry_sasl_username.get()
+        sasl_password = self.entry_sasl_password.get()
+
 
         # Create a new configparser object
         config = configparser.ConfigParser()
@@ -2062,7 +2110,10 @@ class ConfigWindow(tk.Toplevel):
             "port": port,
             "ssl_enabled": ssl_enabled,
             "font_family": self.font_var.get(),
-            "font_size": self.font_size_var.get()
+            "font_size": self.font_size_var.get(),
+            "sasl_enabled": sasl_enabled,
+            "sasl_username": sasl_username,
+            "sasl_password": sasl_password
         }
 
         # Write the updated configuration to the conf.rude file
