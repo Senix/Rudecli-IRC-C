@@ -1795,7 +1795,7 @@ class IRCClientGUI:
 
                 # If it's the main user's nickname, set color to green
                 if nickname == self.irc_client.nickname:
-                    nickname_color = "#00ff62"
+                    nickname_color = "#39ff14"
 
                 self.message_text.tag_configure(f"nickname_{nickname}", foreground=nickname_color)
                 self.message_text.tag_add(f"nickname_{nickname}", start_idx, end_idx)
@@ -1810,7 +1810,7 @@ class IRCClientGUI:
             if not start_idx:
                 break
             end_idx = f"{start_idx}+{len(main_user_name)}c"
-            self.message_text.tag_configure("main_user_color", foreground="#00ff62")
+            self.message_text.tag_configure("main_user_color", foreground="#39ff14")
             self.message_text.tag_add("main_user_color", start_idx, end_idx)
             start_idx = end_idx
 
@@ -1841,9 +1841,10 @@ class IRCClientGUI:
                 
                 # Ensure we're not treating marked URLs as channels
                 if "<URL>" not in self.message_text.get(start_idx, end_idx) and "</URL>" not in self.message_text.get(start_idx, end_idx):
-                    self.message_text.tag_add("channel", start_idx, end_idx)
-                    self.message_text.tag_configure("channel", foreground="cyan", underline=1)
-                    self.message_text.tag_bind("channel", "<Button-1>", lambda e, channel=channel: self.join_channel(channel))
+                    tag_name = f"channel_{channel}"  # Create a unique tag for the channel
+                    self.message_text.tag_add(tag_name, start_idx, end_idx)
+                    self.message_text.tag_configure(tag_name, foreground="cyan", underline=1)
+                    self.message_text.tag_bind(tag_name, "<Button-1>", lambda e, ch=channel: self.join_channel(ch))
                 
                 # Move the start index to after the current found channel to continue the search
                 start_idx = end_idx
