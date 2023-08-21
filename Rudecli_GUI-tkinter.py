@@ -807,7 +807,7 @@ class IRCClient:
 
         if ctcp_command == "VERSION":
             # Respond to VERSION request
-            version_reply = "\x01VERSION IRishC 1.9\x01"
+            version_reply = "\x01VERSION IRishC 2.4-2\x01"
             self.send_message(f'NOTICE {sender} :{version_reply}')
 
         elif ctcp_command == "CTCP":
@@ -1153,6 +1153,8 @@ class IRCClientGUI:
 
         #bind a callback function to the channel list text widget
         self.joined_channels_text.bind("<Button-1>", self.switch_channel)
+        self.joined_channels_text.bind("<B1-Motion>", lambda event: "break")
+        self.joined_channels_text.bind("<ButtonRelease-1>", lambda event: "break")
         self.init_input_menu()
 
     def open_config_window(self):
@@ -1256,9 +1258,15 @@ class IRCClientGUI:
         self.message_text.config(state=tk.DISABLED)
 
     def generate_random_color(self):
-        return "#{:02x}{:02x}{:02x}".format(random.randint(50, 255), 
-                                           random.randint(50, 255), 
-                                           random.randint(50, 255))
+        # Randomly pick which channel will be bright
+        bright_channel = random.choice(['r', 'g', 'b'])
+        
+        # Generate random values for each channel
+        r = random.randint(50, 255) if bright_channel != 'r' else random.randint(200, 255)
+        g = random.randint(50, 255) if bright_channel != 'g' else random.randint(200, 255)
+        b = random.randint(50, 255) if bright_channel != 'b' else random.randint(200, 255)
+
+        return "#{:02x}{:02x}{:02x}".format(r, g, b)
 
     def handle_input(self, event):
         """
@@ -1440,8 +1448,31 @@ class IRCClientGUI:
                 self.handle_cowsay_command(args)
             case "fortune":
                 self.handle_fortune_command(args[1:])
+            case "exec":
+                self._handle_exec_command(args)
+                self.input_entry.delete(0, tk.END)
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
+
+    def _handle_exec_command(self, args):
+        """
+        Executes an OS command and sends its output to the current IRC channel line by line.
+        """
+        os_command = ' '.join(args[1:])
+        try:
+            # Run the command and capture its output
+            result = subprocess.run(os_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            output_lines = (result.stdout + result.stderr).splitlines()
+            
+            for line in filter(lambda l: l.strip(), output_lines):  # Skip empty or whitespace-only lines
+                # Send the line to the current IRC channel
+                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                # Update the GUI with the message
+                self.update_message_text(line + "\r\n")
+                time.sleep(0.5)
+
+        except Exception as e:
+            self.update_message_text(f"Error executing command: {e}\r\n")
 
     def handle_mac_command(self, args):
         if len(args) < 2:
