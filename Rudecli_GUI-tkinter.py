@@ -208,37 +208,35 @@ class IRCClient:
         # Split the message into lines
         lines = message.split("\n")
 
-        # Send each line to the server
         for line in lines:
+            # Send each line to the server
             self.irc.send(bytes(f'{line}\r\n', 'UTF-8'))
 
             # Extract the target channel and actual message content from the line
             target_match = re.match(r'PRIVMSG (\S+) :(.+)', line)
-            if target_match:
-                target_channel = target_match.group(1)
-                message_content = target_match.group(2)
+            if not target_match:
+                continue
 
-                # Add the sent message to the channel history
-                if target_channel not in self.channel_messages:
-                    self.channel_messages[target_channel] = []
+            target_channel, message_content = target_match.groups()
 
-                # Only store the actual content of the message, not the entire command
-                self.channel_messages[target_channel].append((timestamp, self.nickname, message_content))
+            # Convert ACTION message format before adding to channel history
+            formatted_message = self._format_ctcp_action(self.nickname, message_content)
 
-                # If the target is a DM
-                if target_channel not in self.joined_channels:
-                    if target_channel not in self.dm_messages:
-                        self.dm_messages[target_channel] = []
-                    sent_dm = f"{timestamp} <{self.nickname}> {message_content}\n"
-                    self.dm_messages[target_channel].append(sent_dm)
+            # Store the actual content of the message, not the entire command
+            message_data = (timestamp, self.nickname, formatted_message)
 
-                # Check if the message history size exceeds the maximum allowed
-                if len(self.channel_messages[target_channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
-                    # If the history exceeds the limit, remove the oldest messages to maintain the limit
-                    self.channel_messages[target_channel] = self.channel_messages[target_channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
+            # Handle channel messages
+            self.channel_messages.setdefault(target_channel, []).append(message_data)
+            if len(self.channel_messages[target_channel]) > self.MAX_MESSAGE_HISTORY_SIZE:
+                self.channel_messages[target_channel] = self.channel_messages[target_channel][-self.MAX_MESSAGE_HISTORY_SIZE:]
 
-                # Log the message with the timestamp for display
-                self.log_message(target_channel, self.nickname, message_content, is_sent=True)
+            # Handle DMs
+            if target_channel not in self.joined_channels:
+                sent_dm = f"{timestamp} <{self.nickname}> {formatted_message}\n"
+                self.dm_messages.setdefault(target_channel, []).append(sent_dm)
+
+            # Log the message with the timestamp for display
+            self.log_message(target_channel, self.nickname, formatted_message, is_sent=True)
 
     def send_ctcp_request(self, target, command, parameter=None):
         """
@@ -729,68 +727,83 @@ class IRCClient:
         target = tokens.params[0]
         message_content = tokens.params[1]
         sender = tokens.hostmask.nickname  # Define the sender here
-        received_messages = ""
-
-        if target == self.nickname:
-            # This is a DM
-            if sender not in self.dm_users:
-                self.dm_users.append(sender)
-
-            received_dm = f"{timestamp} <{sender}> {message_content}\n"
-            self.log_message(f"{sender}", sender, message_content)
-
-            if sender not in self.dm_messages:
-                self.dm_messages[sender] = []
-
-            self.dm_messages[sender].append(received_dm)
-
-            # Check if this DM is already in the channels_with_activity list
-            dm_name = f"DM: {sender}"
-
-            if dm_name not in self.irc_client_gui.channels_with_activity:
-                self.irc_client_gui.channels_with_activity.append(dm_name)
-                
-            # Update the channels list in the GUI every time a DM is received
-            self.irc_client_gui.update_joined_channels_list(dm_name) 
-
-            # Only display the DM in the GUI if the currently selected channel is the DM from this sender
-            if self.current_channel == sender:
-                self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
-        else:
-            # This is a channel message
-            self.log_message(target, sender, message_content, is_sent=False)
-
+        
         if sender == self.nickname:
             return
-        if self.should_ignore(sender):  # ignore based on hostmask
+
+        if self.should_ignore(sender) or sender in self.ignore_list:
             return
-        if sender in self.ignore_list:  # ignore based on nick
-            return
+
+        if target == self.nickname:
+            self._handle_direct_message(sender, timestamp, message_content)
+        else:
+            self._handle_channel_message(target, sender, timestamp, message_content)
+
         if self.nickname in message_content:
-            self.trigger_beep_notification(channel_name=target, message_content=message_content)
-            if target not in self.irc_client_gui.channels_with_mentions:
-                self.irc_client_gui.channels_with_mentions.append(target)
-                self.irc_client_gui.update_joined_channels_list(target)
-        if target not in self.irc_client_gui.channels_with_activity:
-            self.irc_client_gui.channels_with_activity.append(target)
-            self.irc_client_gui.update_joined_channels_list(target)
+            self._handle_mention(target, message_content)
+
+        return self._get_received_messages(target, sender, timestamp, message_content)
+
+
+    def _handle_direct_message(self, sender, timestamp, message_content):
+        if sender not in self.dm_users:
+            self.dm_users.append(sender)
+
+        formatted_message = self._format_ctcp_action(sender, message_content)
+        received_dm = f"{timestamp} {formatted_message}\n"
+        
+        self.log_message(sender, sender, message_content)
+
+        self.dm_messages.setdefault(sender, []).append(received_dm)
+
+        dm_name = f"DM: {sender}"
+        if dm_name not in self.irc_client_gui.channels_with_activity:
+            self.irc_client_gui.channels_with_activity.append(dm_name)
+            self.irc_client_gui.update_joined_channels_list(dm_name)
+
+        if self.current_channel == sender:
+            self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
+
+
+    def _handle_channel_message(self, target, sender, timestamp, message_content):
+        formatted_message = self._format_ctcp_action(sender, message_content)
+
+        # Log the formatted message
+        self.log_message(target, sender, formatted_message, is_sent=False)
 
         if message_content.startswith("\x01") and message_content.endswith("\x01"):
             received_message = self.handle_ctcp_request(sender, message_content)
             if received_message:
-                if target not in self.channel_messages:
-                    self.channel_messages[target] = []
-                self.channel_messages[target].append((timestamp, sender, received_message))
-                if target == self.current_channel:
-                    received_messages += f'{timestamp} {received_message}\n'
+                # Save the formatted message to channel history
+                self.channel_messages.setdefault(target, []).append((timestamp, sender, formatted_message))
         else:
-            if target not in self.channel_messages:
-                self.channel_messages[target] = []
-            self.channel_messages[target].append((timestamp, sender, message_content))
-            if target == self.current_channel:
-                received_messages += f'{timestamp} <{sender}> {message_content}\n'
+            # Save the formatted message to channel history
+            self.channel_messages.setdefault(target, []).append((timestamp, sender, formatted_message))
 
+        if target not in self.irc_client_gui.channels_with_activity:
+            self.irc_client_gui.channels_with_activity.append(target)
+            self.irc_client_gui.update_joined_channels_list(target)
+
+    def _handle_mention(self, target, message_content):
+        self.trigger_beep_notification(channel_name=target, message_content=message_content)
+        if target not in self.irc_client_gui.channels_with_mentions:
+            self.irc_client_gui.channels_with_mentions.append(target)
+            self.irc_client_gui.update_joined_channels_list(target)
+
+
+    def _get_received_messages(self, target, sender, timestamp, message_content):
+        received_messages = ""
+        if target == self.current_channel:
+            formatted_message = self._format_ctcp_action(sender, message_content)
+            received_messages = f'{timestamp} {formatted_message}\n'
         return received_messages
+
+    def _format_ctcp_action(self, sender, message_content):
+        """Convert CTCP ACTION messages to a readable format."""
+        if message_content.startswith("\x01ACTION ") and message_content.endswith("\x01"):
+            action_content = message_content[8:-1]  # Strip \x01ACTION and trailing \x01
+            return f"* {sender} {action_content}"
+        return f"<{sender}> {message_content}"
 
     def handle_default_case(self, raw_message):
         if raw_message.startswith(':'):
@@ -856,15 +869,14 @@ class IRCClient:
                 if not self.sound_ctcp_limit_flag:  # If the flag isn't set yet
                     self.sound_ctcp_limit_flag = True
                     self.start_reset_timer()
+        elif ctcp_command == "ACTION":
+            action_content = message_content[8:-1]
+            action_message = f'* {sender} {action_content}'
+            self.log_message(self.current_channel, sender, action_message, is_sent=False)
+            return action_message
         else:
-            if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
-                action_content = message_content[8:-1]
-                action_message = f' * {sender} {action_content}'
-                self.log_message(self.current_channel, sender, action_message, is_sent=False)
-                return action_message
-            else:
-                self.log_message(self.current_channel, sender, message_content, is_sent=False)
-                return f'<{sender}> {message_content}'
+            self.log_message(self.current_channel, sender, message_content, is_sent=False)
+            return f'<{sender}> {message_content}'
 
         return None  # No standard message to display
 
@@ -1180,7 +1192,7 @@ class IRCClientGUI:
     def adjust_sash_position(self):
         new_width = self.root.winfo_width()
         if new_width != self.last_width:
-            self.paned_window.sash_place(0, new_width - 150, 0)
+            self.paned_window.sash_place(0, new_width - 170, 0)
             self.last_width = new_width
 
     def open_config_window(self):
@@ -1580,19 +1592,19 @@ class IRCClientGUI:
 
         # Running the fortune with cowsay command
         if category:
-            fortune_result = subprocess.run(['fortune', category], capture_output=True, text=True)
+            fortune_result = subprocess.run(['fortune', '-s', category], capture_output=True, text=True)
         else:
-            fortune_result = subprocess.run(['fortune'], capture_output=True, text=True)
+            fortune_result = subprocess.run(['fortune', '-s'], capture_output=True, text=True)
         
-        cowsay_command = ['cowsay', '-W', '100', '-s', cow_mode[rng], '-f', cowfile]
-        print(f"DEBUG: Running cowsay command: {' '.join(cowsay_command)}")  # Debug statement
+        cowsay_command = ['cowsay', '-W', '100', cow_mode[rng], '-f', cowfile]
+        print(f"DEBUG: Running cowsay command: {fortune_result} {' '.join(cowsay_command)}")
         cowsay_result = subprocess.run(cowsay_command, input=fortune_result.stdout, capture_output=True, text=True)
 
         return cowsay_result.stdout
 
     def cowsay_custom(self, message):
         # Just a simple cowsay with the provided message
-        cowsay_result = subprocess.run(['cowsay', '-W', '100', '-f', 'flaming-sheep', '-s'], input=message, capture_output=True, text=True)
+        cowsay_result = subprocess.run(['cowsay', '-W', '100', '-f', 'flaming-sheep'], input=message, capture_output=True, text=True)
         return cowsay_result.stdout
 
     def handle_fortune_command(self, args=[]):
@@ -1655,6 +1667,8 @@ class IRCClientGUI:
         self.update_message_text(f'/cowsay to generate and send a cowsay to the channel\r\n')
         self.update_message_text(f'/fortune to tell fortune. /fortune <library> gives a fortune from that library\r\n')
         self.update_message_text(f'cowsay & fortune will only work if you have both fortune and cowsay installed\r\n')
+        self.update_message_text(f'/exec command will run the following command on your machine and output to the channel youre in\r\n')
+        self.update_message_text(f'Example: /exec ping -c 1 www.google.com\r\n')
 
     def format_message_for_display(self, message):
         # Remove color codes
@@ -1784,6 +1798,19 @@ class IRCClientGUI:
             if line == self.irc_client.current_channel or line == f"DM: {self.irc_client.current_channel}":  # apply the "selected" tag if it's the current channel or DM
                 self.joined_channels_text.tag_add("selected", f"{idx + 1}.0", f"{idx + 1}.end")
                 self.update_window_title(self.irc_client.nickname, self.irc_client.current_channel)  # using the actual current channel or DM
+
+        # Specific ASCII art you want to add
+        ascii_art = """
+
+        .-.-.
+       (_\|/_)
+       ( /|\ )    
+        '-'-'`-._
+
+        """
+        
+        # Add the ASCII art at the end
+        self.joined_channels_text.insert(tk.END, "\n" + ascii_art)
 
         self.joined_channels_text.config(state=tk.DISABLED)
 
@@ -2019,10 +2046,8 @@ class IRCClientGUI:
         if channel in self.irc_client.channel_messages:
             messages = self.irc_client.channel_messages[channel]
             text = ''
-            for timestamp, sender, message in messages:
-                if message.startswith(f'PRIVMSG {channel} :'):
-                    message = message[len(f'PRIVMSG {channel} :'):]
-                text += f'{timestamp} <{sender}> {message}\n'
+            for timestamp, _, message in messages:  # We won't use sender here
+                text += f'{timestamp} {message}\n'
             self.update_message_text(text)
         else:
             self.update_message_text('No messages to display in the current channel.\n')
