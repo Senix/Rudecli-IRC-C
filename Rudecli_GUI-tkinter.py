@@ -41,6 +41,7 @@ import tkinter as tk
 import tkinter.font as tkFont
 from plyer import notification
 from queue import Queue
+from functools import partial
 from tkinter import messagebox, scrolledtext, Menu
 from tkinter.constants import *
 
@@ -838,7 +839,7 @@ class IRCClient:
 
         elif ctcp_command == "CLIENTINFO":
             # Respond with supported CTCP commands
-            client_info_reply = "\x01CLIENTINFO VERSION CTCP TIME PING FINGER SOUND\x01"
+            client_info_reply = "\x01CLIENTINFO VERSION CTCP PING FINGER SOUND\x01"
             self.send_message(f'NOTICE {sender} :{client_info_reply}')
 
         elif ctcp_command == "SOUND":
@@ -1110,11 +1111,20 @@ class IRCClientGUI:
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
         self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff")  # Configure tags
 
-        self.message_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ffffff", cursor="arrow", font=self.chat_font)
-        self.message_text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+        # Create a PanedWindow
+        self.paned_window = tk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        self.paned_window.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
 
-        self.user_list_frame = tk.Frame(self.root, width=100, height=400, bg="black")
-        self.user_list_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=1, pady=1)
+        # Create a frame for the message text and add it to the PanedWindow
+        self.message_frame = tk.Frame(self.paned_window, bg="black")
+        self.paned_window.add(self.message_frame)
+
+        self.message_text = scrolledtext.ScrolledText(self.message_frame, state=tk.DISABLED, bg="black", cursor="arrow", font=self.chat_font)
+        self.message_text.pack(fill=tk.BOTH, expand=True)
+
+        # Add user_list_frame to the PanedWindow
+        self.user_list_frame = tk.Frame(self.paned_window, width=20, height=400, bg="black")
+        self.paned_window.add(self.user_list_frame)
 
         self.user_list_label = tk.Label(self.user_list_frame, text="Users:", bg="black", fg="#39ff14")
         self.user_list_label.pack()
@@ -1143,8 +1153,11 @@ class IRCClientGUI:
         self.exit_button.pack(side=tk.RIGHT)
 
         self.root.grid_rowconfigure(0, weight=1)
-        self.root.grid_columnconfigure(0, weight=3)
-        self.root.grid_columnconfigure(1, weight=1)
+        self.root.grid_rowconfigure(1, weight=0) 
+        self.root.grid_columnconfigure(0, weight=1)
+
+        self.root.bind("<Configure>", self.delayed_sash_position)
+        self.last_width = self.root.winfo_width()
 
         self.client_start_thread = threading.Thread(target=self.irc_client.start)
         self.client_start_thread.daemon = True 
@@ -1156,6 +1169,19 @@ class IRCClientGUI:
         self.joined_channels_text.bind("<B1-Motion>", lambda event: "break")
         self.joined_channels_text.bind("<ButtonRelease-1>", lambda event: "break")
         self.init_input_menu()
+
+    def delayed_sash_position(self, event):
+        # Cancel any previous delayed adjustments
+        if hasattr(self, "sash_adjustment_id"):
+            self.root.after_cancel(self.sash_adjustment_id)
+        # Schedule a new adjustment 100ms in the future
+        self.sash_adjustment_id = self.root.after(100, self.adjust_sash_position)
+
+    def adjust_sash_position(self):
+        new_width = self.root.winfo_width()
+        if new_width != self.last_width:
+            self.paned_window.sash_place(0, new_width - 150, 0)
+            self.last_width = new_width
 
     def open_config_window(self):
         config_window = ConfigWindow(self.current_config)
@@ -1273,6 +1299,11 @@ class IRCClientGUI:
         This handles the user input, passes to command parser if needed.
         """
         user_input = self.input_entry.get().strip()
+        
+        # Check for empty input
+        if not user_input:
+            return  # Exit the method without doing anything if input is empty
+        
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
         if user_input[0] == "/":
             self._command_parser(user_input, user_input[1:].split()[0])
@@ -1495,23 +1526,17 @@ class IRCClientGUI:
         self.input_entry.delete(0, tk.END)
 
     def handle_cowsay_command(self, args):
-        import shlex
         try:
-            # If the user provided multiple arguments after /cowsay
-            if len(args) > 2:
-                message = ' '.join(args[1:])
-            elif len(args) == 2:
-                # If the user provided only a single argument, treat it as a category for fortune
-                category = args[1]
-                message = subprocess.check_output(f"fortune -as {shlex.quote(category)}", shell=True).decode('utf-8').strip()
+            # Determine if we're dealing with a category, custom message, or default
+            if len(args) == 1:
+                message = self.cowsay_fortune()  # Default random fortune
+            elif len(args) == 2 and self.is_fortune_category(args[1]):
+                message = self.cowsay_fortune(category=args[1])  # Specific fortune category
             else:
-                # If the user just entered /cowsay without any additional arguments, use fortune with default settings
-                message = subprocess.check_output("fortune -as", shell=True).decode('utf-8').strip()
+                message = self.cowsay_custom(' '.join(args[1:]))  # Custom message
 
-            # Use the message with cowsay
-            result = subprocess.check_output(f"echo {shlex.quote(message)} | cowsay -W 100 -s", shell=True).decode('utf-8')
-
-            for line in result.split("\n"):
+            # Send the message to the channel
+            for line in message.split("\n"):
                 if not line.strip():
                     continue
 
@@ -1524,6 +1549,51 @@ class IRCClientGUI:
         except Exception as e:
             self.update_message_text(f"Error executing cowsay: {e}\r\n")
         self.input_entry.delete(0, tk.END)
+
+    def is_fortune_category(self, category):
+        try:
+            # Attempt to get a fortune for the category; if it fails, it's not a valid category
+            subprocess.check_output(f"fortune {category}", shell=True)
+            return True
+        except:
+            return False
+
+    def cowsay_fortune(self, category=None):
+        cow_mode = {
+            1: "-b",
+            2: "-d",
+            3: "",  # default
+            4: "-g",
+            5: "-p",
+            6: "-s",
+            7: "-t",
+            8: "-w",
+            9: "-y"
+        }
+
+        rng = random.randint(1, 9)
+
+        # Getting the list of cowfiles
+        result = subprocess.run(['cowsay', '-l'], capture_output=True, text=True)
+        cowfiles = result.stdout.split()[1:]
+        cowfile = random.choice(cowfiles)
+
+        # Running the fortune with cowsay command
+        if category:
+            fortune_result = subprocess.run(['fortune', category], capture_output=True, text=True)
+        else:
+            fortune_result = subprocess.run(['fortune'], capture_output=True, text=True)
+        
+        cowsay_command = ['cowsay', '-W', '100', '-s', cow_mode[rng], '-f', cowfile]
+        print(f"DEBUG: Running cowsay command: {' '.join(cowsay_command)}")  # Debug statement
+        cowsay_result = subprocess.run(cowsay_command, input=fortune_result.stdout, capture_output=True, text=True)
+
+        return cowsay_result.stdout
+
+    def cowsay_custom(self, message):
+        # Just a simple cowsay with the provided message
+        cowsay_result = subprocess.run(['cowsay', '-W', '100', '-f', 'flaming-sheep', '-s'], input=message, capture_output=True, text=True)
+        return cowsay_result.stdout
 
     def handle_fortune_command(self, args=[]):
         import shlex
@@ -1591,8 +1661,8 @@ class IRCClientGUI:
         message = re.sub(r'\x03(\d{1,2}(,\d{1,2})?)?', '', message)
         
         # Define patterns for bold, italic, and reset
-        bold_pattern = r'\x02(.*?)\x02|\x02(.*?)\x0F'
-        italic_pattern = r'\x1D(.*?)\x1D|\x1D(.*?)\x0F'
+        bold_pattern = r'\x02(.*?)(?:\x02|\x0F|$)'  # Modified to make the closing code optional and also check for end of string
+        italic_pattern = r'\x1D(.*?)(?:\x1D|\x0F|$)'  # Modified similarly
         
         # Function to extract ranges from matches
         def get_ranges(pattern, msg):
@@ -1611,14 +1681,14 @@ class IRCClientGUI:
         italic_ranges = get_ranges(italic_pattern, message)
         
         # For bold-italic, we'll look for overlapping ranges
-        bold_italic_ranges = [(b_start, b_end) for b_start, b_end in bold_ranges 
-                              for i_start, i_end in italic_ranges 
-                              if b_start <= i_start and b_end >= i_end]
+        bold_italic_ranges = set([(b_start, b_end) for b_start, b_end in bold_ranges 
+                                  for i_start, i_end in italic_ranges 
+                                  if b_start <= i_start and b_end >= i_end])
 
         # Remove the formatting characters to get the formatted message
         formatted_message = re.sub(r'[\x02\x1D\x0F]', '', message)
         
-        return formatted_message, bold_ranges, italic_ranges, bold_italic_ranges
+        return formatted_message, bold_ranges, italic_ranges, list(bold_italic_ranges)
 
     def display_dm_messages(self, user):
         if user in self.irc_client.dm_messages:
@@ -1870,15 +1940,27 @@ class IRCClientGUI:
                 break
 
         urls = self.find_urls(cleaned_formatted_text)
-        for url in urls:
+        for index, url in enumerate(urls):
             # Mark found URLs in the text to avoid them being treated as channels
             cleaned_formatted_text = cleaned_formatted_text.replace(url, f"<URL>{url}</URL>")
-            start_idx = self.message_text.search(url, "1.0", tk.END)
-            if start_idx:
+            start_idx = "1.0"
+            while True:
+                start_idx = self.message_text.search(url, start_idx, tk.END)
+                if not start_idx:
+                    break
                 end_idx = f"{start_idx}+{len(url)}c"
-                self.message_text.tag_add("url", start_idx, end_idx)
-                self.message_text.tag_configure("url", foreground="blue", underline=1)
-                self.message_text.tag_bind("url", "<Button-1>", lambda e, url=url: self.open_url(url))
+                
+                # Create a unique tag for each URL
+                url_tag = f"url_{index}_{start_idx}"  # Make it unique per occurrence
+                
+                self.message_text.tag_add(url_tag, start_idx, end_idx)
+                self.message_text.tag_configure(url_tag, foreground="blue", underline=1)
+                
+                # Bind the URL to the open_url method using partial
+                self.message_text.tag_bind(url_tag, "<Button-1>", partial(self.open_url, url=url))
+                
+                # Move the start index to after the current found URL to continue the search
+                start_idx = end_idx
 
         channels = self.find_channels(cleaned_formatted_text)
         for channel in channels:
@@ -1899,6 +1981,31 @@ class IRCClientGUI:
                 
                 # Move the start index to after the current found channel to continue the search
                 start_idx = end_idx
+
+        formatted_message, bold_ranges, italic_ranges, bold_italic_ranges = self.format_message_for_display(cleaned_formatted_text)
+
+        # Apply bold formatting
+        for start, end in bold_ranges:
+            if (start, end) not in bold_italic_ranges:  # Ensure we're not reapplying to bold-italic ranges
+                start_idx = f"{start_insert_index}+{start}c"
+                end_idx = f"{start_insert_index}+{end}c"
+                self.message_text.tag_add("bold", start_idx, end_idx)
+                self.message_text.tag_configure("bold", weight="bold")
+
+        # Apply italic formatting
+        for start, end in italic_ranges:
+            if (start, end) not in bold_italic_ranges:  # Ensure we're not reapplying to bold-italic ranges
+                start_idx = f"{start_insert_index}+{start}c"
+                end_idx = f"{start_insert_index}+{end}c"
+                self.message_text.tag_add("italic", start_idx, end_idx)
+                self.message_text.tag_configure("italic", slant="italic")
+
+        # Apply bold-italic formatting
+        for start, end in bold_italic_ranges:
+            start_idx = f"{start_insert_index}+{start}c"
+            end_idx = f"{start_insert_index}+{end}c"
+            self.message_text.tag_add("bold_italic", start_idx, end_idx)
+            self.message_text.tag_configure("bold_italic", weight="bold", slant="italic")
 
         # apply #C0FFEE text color
         self.message_text.tag_configure("brightgreen", foreground="#C0FFEE")
@@ -1976,7 +2083,7 @@ class IRCClientGUI:
         url_pattern = re.compile(r'(\w+://\S+|www\.\S+)')
         return url_pattern.findall(text)
 
-    def open_url(self, url):
+    def open_url(self, event, url):
         import webbrowser
         webbrowser.open(url)
 
