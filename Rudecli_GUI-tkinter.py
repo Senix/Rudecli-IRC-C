@@ -113,22 +113,15 @@ class IRCClient:
         """
         Connect to the IRC server
         """
-        clover_art = """
-    ,-.----.                                       ,----..    ,---,                   ___     
-    \    /  \                     ,---,           /   /   \ ,--.' |                 ,--.'|_   
-    ;   :    \          ,--,    ,---.'|          |   :     :|  |  :                 |  | :,'  
-    |   | .\ :        ,'_ /|    |   | :          .   |  ;. /:  :  :                 :  : ' :  
-    .   : |: |   .--. |  | :    |   | |   ,---.  .   ; /--` :  |  |,--.  ,--.--.  .;__,'  /   
-    |   |  \ : ,'_ /| :  . |  ,--.__| |  /     \ ;   | ;    |  :  '   | /       \ |  |   |    
-    |   : .  / |  ' | |  . . /   ,'   | /    /  |.   | '___ '  :  | | :.--.  .-. |:__,'| :    
-    ;   | |  \ |  | ' |  | |.   '  /  |.    ' / |'   ; : .'||  |  ' | : ," .--.; |  '  : |__  
-    |   | ;\  \:  | : ;  ; |'   ; |:  |'   ;   /|'   | '/  :|  :  :_:,'/  /  ,.  |  |  | '.'| 
-    :   ' | \.''  :  `--'   \   | '/  ''   |  / |'   :    / |  | ,'   ;  :   .'   \ |  ,   /  
-    :   : :-'  :  ,      .-./   :    :||   :    ||   :    /  \   \ .'  `--`---'             
-    |   |.'     `--`----'    \   \  /   \   \  /  \   \ .'  `--''     |  ,     .-./  ---`-'   
-    `---'                     `----'     `----'    `---`               `--`---'               
-    \r\n
-    """
+
+        # Randomly select an ASCII art file from the Splash directory
+        splash_dir = 'Splash'
+        splash_files = [f for f in os.listdir(splash_dir) if os.path.isfile(os.path.join(splash_dir, f))]
+        selected_splash_file = random.choice(splash_files)
+
+        # Read the selected ASCII art file
+        with open(os.path.join(splash_dir, selected_splash_file), 'r', encoding='utf-8') as f:
+            clover_art = f.read()
 
         print(f'Connecting to server: {self.server}:{self.port}')
 
@@ -523,7 +516,7 @@ class IRCClient:
         """
         isupport_params = tokens.params[:-1]
 
-        # Store these in a dictionary or a suitable data structure
+        # Store these in a dictionary 
         new_capabilities = {}  # Track the new capabilities from this specific message
         for param in isupport_params:
             if '=' in param:
@@ -537,7 +530,7 @@ class IRCClient:
                     new_capabilities[param] = True
                     self.server_capabilities[param] = True
 
-        # Display these new capabilities:
+        # Display capabilities:
         for key, value in new_capabilities.items():
             display_text = f"{key}: {value}"
             self.irc_client_gui.update_server_feedback_text(display_text)
@@ -668,7 +661,7 @@ class IRCClient:
                         self.user_list[channel].append(join_user)
                     else:
                         self.user_list[channel].remove(join_user)
-                        self.user_list[channel].append(join_user)  # Ensure the user is at the end of the list
+                        self.user_list[channel].append(join_user) 
                     # Only update the GUI if the affected channel is the current channel
                     if channel == self.irc_client_gui.current_channel:
                         self.irc_client_gui.update_user_list(channel)
@@ -726,12 +719,15 @@ class IRCClient:
     def handle_privmsg(self, tokens, timestamp):
         target = tokens.params[0]
         message_content = tokens.params[1]
-        sender = tokens.hostmask.nickname  # Define the sender here
         
+        # Assuming tokens.hostmask has user and host attributes
+        hostmask = f"{tokens.hostmask.nickname}!{tokens.hostmask.username}@{tokens.hostmask.hostname}"
+        sender = tokens.hostmask.nickname 
+
         if sender == self.nickname:
             return
 
-        if self.should_ignore(sender) or sender in self.ignore_list:
+        if self.should_ignore(hostmask) or sender in self.ignore_list:
             return
 
         if target == self.nickname:
@@ -768,16 +764,13 @@ class IRCClient:
     def _handle_channel_message(self, target, sender, timestamp, message_content):
         formatted_message = self._format_ctcp_action(sender, message_content)
 
-        # Log the formatted message
         self.log_message(target, sender, formatted_message, is_sent=False)
 
         if message_content.startswith("\x01") and message_content.endswith("\x01"):
             received_message = self.handle_ctcp_request(sender, message_content)
             if received_message:
-                # Save the formatted message to channel history
                 self.channel_messages.setdefault(target, []).append((timestamp, sender, formatted_message))
         else:
-            # Save the formatted message to channel history
             self.channel_messages.setdefault(target, []).append((timestamp, sender, formatted_message))
 
         if target not in self.irc_client_gui.channels_with_activity:
@@ -789,7 +782,6 @@ class IRCClient:
         if target not in self.irc_client_gui.channels_with_mentions:
             self.irc_client_gui.channels_with_mentions.append(target)
             self.irc_client_gui.update_joined_channels_list(target)
-
 
     def _get_received_messages(self, target, sender, timestamp, message_content):
         received_messages = ""
@@ -1016,8 +1008,8 @@ class IRCClient:
         saves ignore list
         """
         with open("ignore_list.txt", "w") as f:
-            for user in self.ignore_list:
-                f.write(f"{user}\n")
+            for item in self.ignore_list:
+                f.write(f"{item}\n")
 
     def load_ignore_list(self):
         """
@@ -1116,25 +1108,22 @@ class IRCClientGUI:
 
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
         current_font = self.server_feedback_text.cget("font")
-        self.server_feedback_text.tag_configure("bold", font=(current_font, 10, "bold"))  # Configure the bold tag 
+        self.server_feedback_text.tag_configure("bold", font=(current_font, 10, "bold")) 
         self.server_feedback_text.tag_configure("bold", font=(current_font, 10, "bold"))
         self.server_feedback_text.tag_configure("italic", font=(current_font, 10, "italic"))
         self.server_feedback_text.tag_configure("bold_italic", font=(current_font, 10, "bold italic"))
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
-        self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff")  # Configure tags
+        self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff") 
 
-        # Create a PanedWindow
         self.paned_window = tk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         self.paned_window.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
 
-        # Create a frame for the message text and add it to the PanedWindow
         self.message_frame = tk.Frame(self.paned_window, bg="black")
         self.paned_window.add(self.message_frame)
 
         self.message_text = scrolledtext.ScrolledText(self.message_frame, state=tk.DISABLED, bg="black", cursor="arrow", font=self.chat_font)
         self.message_text.pack(fill=tk.BOTH, expand=True)
 
-        # Add user_list_frame to the PanedWindow
         self.user_list_frame = tk.Frame(self.paned_window, width=20, height=400, bg="black")
         self.paned_window.add(self.user_list_frame)
 
@@ -1176,7 +1165,6 @@ class IRCClientGUI:
         self.client_start_thread.start()
         self.irc_client.irc_client_gui = self
 
-        #bind a callback function to the channel list text widget
         self.joined_channels_text.bind("<Button-1>", self.switch_channel)
         self.joined_channels_text.bind("<B1-Motion>", lambda event: "break")
         self.joined_channels_text.bind("<ButtonRelease-1>", lambda event: "break")
@@ -1224,7 +1212,7 @@ class IRCClientGUI:
                 title=title,
                 message=message,
                 app_icon=icon_path,  
-                timeout=3,  
+                timeout=5,  
             )
         except Exception as e:
             print(f"Desktop notification error: {e}")
@@ -1799,7 +1787,6 @@ class IRCClientGUI:
                 self.joined_channels_text.tag_add("selected", f"{idx + 1}.0", f"{idx + 1}.end")
                 self.update_window_title(self.irc_client.nickname, self.irc_client.current_channel)  # using the actual current channel or DM
 
-        # Specific ASCII art you want to add
         ascii_art = """
 
         .-.-.
@@ -2013,7 +2000,7 @@ class IRCClientGUI:
 
         # Apply bold formatting
         for start, end in bold_ranges:
-            if (start, end) not in bold_italic_ranges:  # Ensure we're not reapplying to bold-italic ranges
+            if (start, end) not in bold_italic_ranges:  
                 start_idx = f"{start_insert_index}+{start}c"
                 end_idx = f"{start_insert_index}+{end}c"
                 self.message_text.tag_add("bold", start_idx, end_idx)
@@ -2021,7 +2008,7 @@ class IRCClientGUI:
 
         # Apply italic formatting
         for start, end in italic_ranges:
-            if (start, end) not in bold_italic_ranges:  # Ensure we're not reapplying to bold-italic ranges
+            if (start, end) not in bold_italic_ranges:  
                 start_idx = f"{start_insert_index}+{start}c"
                 end_idx = f"{start_insert_index}+{end}c"
                 self.message_text.tag_add("italic", start_idx, end_idx)
@@ -2046,7 +2033,7 @@ class IRCClientGUI:
         if channel in self.irc_client.channel_messages:
             messages = self.irc_client.channel_messages[channel]
             text = ''
-            for timestamp, _, message in messages:  # We won't use sender here
+            for timestamp, _, message in messages:  
                 text += f'{timestamp} {message}\n'
             self.update_message_text(text)
         else:
