@@ -215,8 +215,8 @@ class IRCClient:
             # Convert ACTION message format before adding to channel history
             formatted_message = self._format_ctcp_action(self.nickname, message_content)
 
-            # Store the actual content of the message, not the entire command
-            message_data = (timestamp, self.nickname, formatted_message)
+            # Generate the actual content of the message, not the entire command
+            message_data = (timestamp, self.nickname, message_content)  # Note: We use message_content directly
 
             # Handle channel messages
             self.channel_messages.setdefault(target_channel, []).append(message_data)
@@ -225,7 +225,7 @@ class IRCClient:
 
             # Handle DMs
             if target_channel not in self.joined_channels:
-                sent_dm = f"{timestamp} <{self.nickname}> {formatted_message}\n"
+                sent_dm = f"{timestamp} <{self.nickname}> {message_content}\n"  # Note: We use message_content directly
                 self.dm_messages.setdefault(target_channel, []).append(sent_dm)
 
             # Log the message with the timestamp for display
@@ -1694,8 +1694,11 @@ class IRCClientGUI:
 
     def display_dm_messages(self, user):
         if user in self.irc_client.dm_messages:
+            displayed_messages = set()  # Use a set to track unique messages
             for message in self.irc_client.dm_messages[user]:
-                self.update_message_text(message)
+                if message not in displayed_messages:
+                    self.update_message_text(message)
+                    displayed_messages.add(message)
 
     def update_server_feedback_text(self, message):
         """
