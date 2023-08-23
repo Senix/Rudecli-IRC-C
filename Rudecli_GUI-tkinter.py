@@ -216,7 +216,7 @@ class IRCClient:
             formatted_message = self._format_ctcp_action(self.nickname, message_content)
 
             # Generate the actual content of the message, not the entire command
-            message_data = (timestamp, self.nickname, message_content)  # Note: We use message_content directly
+            message_data = (timestamp, self.nickname, formatted_message)  # Use formatted_message instead
 
             # Handle channel messages
             self.channel_messages.setdefault(target_channel, []).append(message_data)
@@ -590,6 +590,8 @@ class IRCClient:
 
         elif command == "301":
             away_message = tokens.params[2]
+            if nickname not in self.whois_data:
+                self.whois_data[nickname] = {}  
             self.whois_data[nickname]["Away"] = away_message
 
         elif command == "671":
