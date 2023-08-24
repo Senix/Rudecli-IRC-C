@@ -234,7 +234,10 @@ class IRCClient:
 
             # Handle DMs
             if target_channel not in self.joined_channels:
-                sent_dm = f"{timestamp} <{self.nickname}> {message_content}\n"  # Note: We use message_content directly
+                if formatted_message.startswith("* "):
+                    sent_dm = f"{timestamp} {formatted_message}\n"
+                else:
+                    sent_dm = f"{timestamp} <{self.nickname}> {formatted_message}\n"
                 self.dm_messages.setdefault(target_channel, []).append(sent_dm)
 
             # Log the message with the timestamp for display
@@ -919,18 +922,22 @@ class IRCClient:
         print(f"Handling CTCP request from {sender}: {message_content}")
         ctcp_parts = message_content[1:-1].split(" ", 1)
         ctcp_command = ctcp_parts[0]
+
         if ctcp_command == "VERSION":
             # Respond to VERSION request
             version_reply = "\x01VERSION IRishC v2.6-3\x01"
             self.send_message(f'NOTICE {sender} :{version_reply}')
+
         elif ctcp_command == "CTCP":
             # Respond to CTCP request
             ctcp_response = "\x01CTCP response\x01"
             self.send_message(f'NOTICE {sender} :{ctcp_response}')
+
         elif ctcp_command == "TIME":
             # Respond to TIME request
             time_reply = "\x01TIME " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\x01"
             self.send_message(f'NOTICE {sender} :{time_reply}')
+
         elif ctcp_command == "PING":
             if len(ctcp_parts) > 1:
                 ping_data = ctcp_parts[1]
@@ -951,6 +958,7 @@ class IRCClient:
             # Respond with supported CTCP commands
             client_info_reply = "\x01CLIENTINFO VERSION CTCP TIME PING FINGER SOUND\x01"
             self.send_message(f'NOTICE {sender} :{client_info_reply}')
+            
         elif ctcp_command == "SOUND":
             if self.sound_ctcp_count < self.sound_ctcp_limit:
                 # Increment the counter
