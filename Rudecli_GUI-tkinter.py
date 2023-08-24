@@ -82,6 +82,7 @@ class IRCClient:
         self.receive_thread = None
         self.stay_alive_thread = None
         self.reconnection_thread = None
+        self.channel_list_window = None
 
         # Protocol specific properties
         self.current_nick_index = 0
@@ -216,11 +217,15 @@ class IRCClient:
 
             target_channel, message_content = target_match.groups()
 
-            # Convert ACTION message format before adding to channel history
-            formatted_message = self._format_ctcp_action(self.nickname, message_content)
+            # Check if it's a CTCP ACTION and format accordingly
+            if message_content.startswith("\x01ACTION ") and message_content.endswith("\x01"):
+                action_content = message_content[8:-1]
+                formatted_message = f"* {self.nickname} {action_content}"
+            else:
+                formatted_message = message_content 
 
             # Generate the actual content of the message, not the entire command
-            message_data = (timestamp, self.nickname, formatted_message)  # Use formatted_message instead
+            message_data = (timestamp, self.nickname, formatted_message)
 
             # Handle channel messages
             self.channel_messages.setdefault(target_channel, []).append(message_data)
@@ -832,93 +837,73 @@ class IRCClient:
     def handle_privmsg(self, tokens, timestamp):
         target = tokens.params[0]
         message_content = tokens.params[1]
+
+        # Constructing the hostmask from the given token attributes
+        hostmask = f"{tokens.hostmask.nickname}!{tokens.hostmask.username}@{tokens.hostmask.hostname}"
         sender = tokens.hostmask.nickname  # Define the sender here
         received_messages = ""
 
-        # If the sender is our own nickname, return early
-        if sender == self.nickname:
+        # Check if the message should be ignored based on hostmask or sender nickname
+        if self.should_ignore(hostmask) or sender in self.ignore_list:
             return
 
-        # Check for ignored users based on hostmask or nick
-        if self.should_ignore(sender) or sender in self.ignore_list:
-            return
-
-        # Check if it's a CTCP message
-        if message_content.startswith("\x01") and message_content.endswith("\x01"):
-            received_message = self.handle_ctcp_request(sender, message_content)
-            if received_message:
-                if target not in self.channel_messages:
-                    self.channel_messages[target] = []
-                self.channel_messages[target].append((timestamp, sender, received_message))
-                if target == self.current_channel:
-                    received_messages += f'{timestamp} {received_message}\n'
-            return received_messages
-        else:
-            if target == self.nickname:
-                self._handle_direct_message(sender, timestamp, message_content)
-            else:
-                self._handle_channel_message(target, sender, timestamp, message_content)
-
-            if self.nickname in message_content:
-                self._handle_mention(target, message_content)
-
-        return self._get_received_messages(target, sender, timestamp, message_content)
-
-    def _handle_direct_message(self, sender, timestamp, message_content):
-        if sender not in self.dm_users:
-            self.dm_users.append(sender)
-
-        formatted_message = self._format_ctcp_action(sender, message_content)
-        received_dm = f"{timestamp} {formatted_message}\n"
-        
-        self.log_message(sender, sender, message_content)
-
-        self.dm_messages.setdefault(sender, []).append(received_dm)
-
-        dm_name = f"DM: {sender}"
-        if dm_name not in self.irc_client_gui.channels_with_activity:
-            self.irc_client_gui.channels_with_activity.append(dm_name)
-            self.irc_client_gui.update_joined_channels_list(dm_name)
-
-        if self.current_channel == sender:
-            self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
-
-
-    def _handle_channel_message(self, target, sender, timestamp, message_content):
-        formatted_message = self._format_ctcp_action(sender, message_content)
-
-        self.log_message(target, sender, formatted_message, is_sent=False)
-
-        if message_content.startswith("\x01") and message_content.endswith("\x01"):
-            received_message = self.handle_ctcp_request(sender, message_content)
-            if received_message:
-                self.channel_messages.setdefault(target, []).append((timestamp, sender, formatted_message))
-        else:
-            self.channel_messages.setdefault(target, []).append((timestamp, sender, formatted_message))
-
-        if target not in self.irc_client_gui.channels_with_activity:
-            self.irc_client_gui.channels_with_activity.append(target)
-            self.irc_client_gui.update_joined_channels_list(target)
-
-    def _handle_mention(self, target, message_content):
-        self.trigger_beep_notification(channel_name=target, message_content=message_content)
-        if target not in self.irc_client_gui.channels_with_mentions:
-            self.irc_client_gui.channels_with_mentions.append(target)
-            self.irc_client_gui.update_joined_channels_list(target)
-
-    def _get_received_messages(self, target, sender, timestamp, message_content):
-        received_messages = ""
-        if target == self.current_channel:
-            formatted_message = self._format_ctcp_action(sender, message_content)
-            received_messages = f'{timestamp} {formatted_message}\n'
-        return received_messages
-
-    def _format_ctcp_action(self, sender, message_content):
-        """Convert CTCP ACTION messages to a readable format."""
+        # Format the message content based on whether it's a CTCP ACTION
         if message_content.startswith("\x01ACTION ") and message_content.endswith("\x01"):
-            action_content = message_content[8:-1]  # Strip \x01ACTION and trailing \x01
-            return f"* {sender} {action_content}"
-        return f"<{sender}> {message_content}"
+            action_content = message_content[8:-1]
+            formatted_message = f"* {sender} {action_content}"
+        else:
+            formatted_message = message_content
+
+        if target == self.nickname:
+            # This is a DM
+            if sender not in self.dm_users:
+                self.dm_users.append(sender)
+            if formatted_message.startswith('* '):
+                received_dm = f"{timestamp} {formatted_message}\n"
+            else:
+                received_dm = f"{timestamp} <{sender}> {formatted_message}\n"
+            self.log_message(f"{sender}", sender, formatted_message)
+            if sender not in self.dm_messages:
+                self.dm_messages[sender] = []
+            self.dm_messages[sender].append(received_dm)
+            # Check if this DM is already in the channels_with_activity list
+            dm_name = f"DM: {sender}"
+            if dm_name not in self.irc_client_gui.channels_with_activity:
+                self.irc_client_gui.channels_with_activity.append(dm_name)
+
+            # Update the channels list in the GUI every time a DM is received
+            self.irc_client_gui.update_joined_channels_list(dm_name)
+            # Only display the DM in the GUI if the currently selected channel is the DM from this sender
+            if self.current_channel == sender:
+                self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
+
+            # Handling CTCP requests here, inside the DM section
+            if message_content.startswith("\x01") and message_content.endswith("\x01"):
+                received_message = self.handle_ctcp_request(sender, message_content)
+                if received_message:
+                    if target not in self.dm_messages:
+                        self.dm_messages[target] = []
+                    self.dm_messages[target].append((timestamp, received_message))
+        else:
+            # This is a channel message
+            self.log_message(target, sender, formatted_message, is_sent=False)
+            if sender == self.nickname:
+                return
+            if self.nickname in message_content:
+                self.trigger_beep_notification(channel_name=target, message_content=message_content)
+                if target not in self.irc_client_gui.channels_with_mentions:
+                    self.irc_client_gui.channels_with_mentions.append(target)
+                    self.irc_client_gui.update_joined_channels_list(target)
+            if target not in self.irc_client_gui.channels_with_activity:
+                self.irc_client_gui.channels_with_activity.append(target)
+                self.irc_client_gui.update_joined_channels_list(target)
+            if target not in self.channel_messages:
+                self.channel_messages[target] = []
+            self.channel_messages[target].append((timestamp, sender, formatted_message))
+            if target == self.current_channel:
+                received_messages += f'{timestamp} <{sender}> {formatted_message}\n'
+
+        return received_messages
 
     def handle_default_case(self, raw_message):
         if raw_message.startswith(':'):
@@ -931,24 +916,21 @@ class IRCClient:
 
     def handle_ctcp_request(self, sender, message_content):
         # Split the CTCP message content at the first space to separate the command from any data
+        print(f"Handling CTCP request from {sender}: {message_content}")
         ctcp_parts = message_content[1:-1].split(" ", 1)
         ctcp_command = ctcp_parts[0]
-
         if ctcp_command == "VERSION":
             # Respond to VERSION request
-            version_reply = "\x01VERSION IRishC 2.4-2\x01"
+            version_reply = "\x01VERSION IRishC v2.6-3\x01"
             self.send_message(f'NOTICE {sender} :{version_reply}')
-
         elif ctcp_command == "CTCP":
             # Respond to CTCP request
             ctcp_response = "\x01CTCP response\x01"
             self.send_message(f'NOTICE {sender} :{ctcp_response}')
-
         elif ctcp_command == "TIME":
             # Respond to TIME request
             time_reply = "\x01TIME " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\x01"
             self.send_message(f'NOTICE {sender} :{time_reply}')
-
         elif ctcp_command == "PING":
             if len(ctcp_parts) > 1:
                 ping_data = ctcp_parts[1]
@@ -961,20 +943,18 @@ class IRCClient:
 
         elif ctcp_command == "FINGER":
             # Respond to FINGER request (customize as per requirement)
-            version_data = "RudeChat 2.6-2"
+            version_data = "IRishC v2.6-3"
             finger_reply = f"\x01FINGER User: {self.nickname}, {self.server}, {version_data}\x01"
             self.send_message(f'NOTICE {sender} :{finger_reply}')
 
         elif ctcp_command == "CLIENTINFO":
             # Respond with supported CTCP commands
-            client_info_reply = "\x01CLIENTINFO VERSION CTCP PING FINGER SOUND\x01"
+            client_info_reply = "\x01CLIENTINFO VERSION CTCP TIME PING FINGER SOUND\x01"
             self.send_message(f'NOTICE {sender} :{client_info_reply}')
-
         elif ctcp_command == "SOUND":
             if self.sound_ctcp_count < self.sound_ctcp_limit:
                 # Increment the counter
                 self.sound_ctcp_count += 1
-
                 # SOUND CTCP can include a file or description of the sound. This is just for logging.
                 sound_data = ctcp_parts[1] if len(ctcp_parts) > 1 else "Unknown sound"
                 print(f"Received SOUND CTCP: BEEP!")
@@ -984,17 +964,23 @@ class IRCClient:
                 if not self.sound_ctcp_limit_flag:  # If the flag isn't set yet
                     self.sound_ctcp_limit_flag = True
                     self.start_reset_timer()
-        elif ctcp_command == "ACTION":
-            timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
-            action_content = message_content[8:-1]
-            action_message = f'* {sender} {action_content}'
-            self.log_message(self.current_channel, sender, action_message, is_sent=False)
-            return action_message
         else:
-            self.log_message(self.current_channel, sender, message_content, is_sent=False)
-            return f'<{sender}> {message_content}'
-
+            if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
+                action_content = message_content[8:-1]
+                action_message = f"* {sender} {action_content}"
+                self.log_message(self.current_channel, sender, action_message, is_sent=False)
+                return action_message
+            else:
+                self.log_message(self.current_channel, sender, message_content, is_sent=False)
+                return f'<{sender}> {message_content}'
         return None  # No standard message to display
+
+    def _format_ctcp_action(self, sender, message_content):
+        """Convert CTCP ACTION messages to a readable format."""
+        if message_content.startswith("\x01ACTION ") and message_content.endswith("\x01"):
+            action_content = message_content[8:-1]  # Strip \x01ACTION and trailing \x01
+            return f"* {action_content}"  # Removed sender
+        return f"<{sender}> {message_content}"
 
     def start_reset_timer(self):
         # If the flag isn't set, don't start the timer
@@ -1197,7 +1183,14 @@ class IRCClient:
     def display_channel_list_window(self):
         current_directory = os.getcwd()
         file_path = os.path.join(current_directory, 'channel_list.txt')
-        ChannelListWindow(file_path)
+        
+        # Check if the window is already open
+        if self.channel_list_window and not self.channel_list_window.is_destroyed:
+            # Bring the existing window to the front
+            self.channel_list_window.lift()
+        else:
+            # Create a new window
+            self.channel_list_window = ChannelListWindow(file_path)
 
     def start(self):
         while not self.exit_event.is_set():
@@ -2250,8 +2243,17 @@ class IRCClientGUI:
         if channel in self.irc_client.channel_messages:
             messages = self.irc_client.channel_messages[channel]
             text = ''
-            for timestamp, _, message in messages:  
-                text += f'{timestamp} {message}\n'
+            for message_data in messages:
+                if len(message_data) == 3:
+                    timestamp, sender, message = message_data
+                    # Check if the message is already formatted with the sender's nickname for CTCP ACTION
+                    if message.startswith('* '):
+                        text += f'{timestamp} {message}\n'
+                    else:
+                        text += f'{timestamp} <{sender}> {message}\n'
+                else:  # Assuming the other format is (timestamp, formatted_message)
+                    timestamp, formatted_message = message_data
+                    text += f'{timestamp} {formatted_message}\n'
             self.update_message_text(text)
         else:
             self.update_message_text('No messages to display in the current channel.\n')
@@ -2494,12 +2496,17 @@ class ChannelListWindow(tk.Toplevel):
     def __init__(self, file_path, *args, **kwargs):
         super(ChannelListWindow, self).__init__(*args, **kwargs)
         self.title("Channel List")
+        self.geometry("790x375")
+        self.is_destroyed = False
 
         # Create a treeview to display the channels without the tree column
         self.tree = ttk.Treeview(self, columns=("Channel", "Users", "Topic"), show='headings')
         self.tree.heading("Channel", text="Channel")
         self.tree.heading("Users", text="Users")
         self.tree.heading("Topic", text="Topic")
+
+        self.close_button = ttk.Button(self, text="Close", command=self.destroy)
+        self.close_button.grid(row=1, column=0, columnspan=2, pady=10, padx=10, sticky="ew")
 
         # Create a scrollbar
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
@@ -2514,28 +2521,33 @@ class ChannelListWindow(tk.Toplevel):
         self.grid_columnconfigure(0, weight=1)
 
         # Read the data from the file and insert into the treeview
-        with open(file_path, 'r') as f:
-            for line_num, line in enumerate(f, start=1):
-                parts = line.strip().split(", ")
-                if len(parts) < 3:
-                    print(f"Skipping malformed line at Line {line_num}: {line}")
-                    continue
-                #
-                try:
-                    channel_name = parts[0].split(": ")[1]
-                    user_count = parts[1].split(": ")[1]
-                    
-                    # Check if there's a topic
-                    topic = parts[2].split(": ")[1] if len(parts[2].split(": ")) > 1 else "No topic"
+        try:
+            with open(file_path, 'r') as f:
+                for line_num, line in enumerate(f, start=1):
+                    parts = line.strip().split(", ")
+                    if len(parts) < 3:
+                        print(f"Skipping malformed line at Line {line_num}: {line}")
+                        continue
 
-                    # Replace channels with name '*' with 'Hidden'
-                    if channel_name == "*":
-                        channel_name = "Hidden"
-                except IndexError:
-                    print(f"Error processing line {line_num}: {line}")
-                    continue
+                    try:
+                        channel_name = parts[0].split(": ")[1]
+                        user_count = parts[1].split(": ")[1]
+                        topic = parts[2].split(": ")[1] if len(parts[2].split(": ")) > 1 else "No topic"
+                        if channel_name == "*":
+                            channel_name = "Hidden"
+                    except Exception as e:  # Catch any kind of exception
+                        print(f"Error processing line {line_num} due to {e}: {line}")
+                        continue
 
-                self.tree.insert("", "end", values=(channel_name, user_count, topic))
+                    # Check if the window is destroyed before inserting
+                    if not self.is_destroyed:
+                        self.tree.insert("", "end", values=(channel_name, user_count, topic))
+        except Exception as e:
+            print(f"Error reading the file {file_path} due to {e}")
+
+    def destroy(self):
+        self.is_destroyed = True  # Set the flag when the window is being destroyed
+        super().destroy()
 
 def main():
     """The Main Function for the RudeChat IRC Client."""
