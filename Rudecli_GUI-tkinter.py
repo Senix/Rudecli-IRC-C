@@ -902,10 +902,17 @@ class IRCClient:
                 self.irc_client_gui.update_joined_channels_list(target)
             if target not in self.channel_messages:
                 self.channel_messages[target] = []
-            self.channel_messages[target].append((timestamp, sender, formatted_message))
-            if target == self.current_channel:
-                received_messages += f'{timestamp} <{sender}> {formatted_message}\n'
-
+            if formatted_message.startswith("* "):
+                # For ACTION messages
+                self.channel_messages[target].append((timestamp, formatted_message))
+                if target == self.current_channel:
+                    received_messages += f'{timestamp} {formatted_message}\n'
+            else:
+                # For regular messages
+                self.channel_messages[target].append((timestamp, sender, formatted_message))
+                if target == self.current_channel:
+                    received_messages += f'{timestamp} <{sender}> {formatted_message}\n'
+            
         return received_messages
 
     def handle_default_case(self, raw_message):
@@ -958,7 +965,7 @@ class IRCClient:
             # Respond with supported CTCP commands
             client_info_reply = "\x01CLIENTINFO VERSION CTCP TIME PING FINGER SOUND\x01"
             self.send_message(f'NOTICE {sender} :{client_info_reply}')
-            
+
         elif ctcp_command == "SOUND":
             if self.sound_ctcp_count < self.sound_ctcp_limit:
                 # Increment the counter
