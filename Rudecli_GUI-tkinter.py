@@ -41,6 +41,7 @@ import logging
 import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkFont
+from PIL import Image, ImageTk
 from plyer import notification
 from queue import Queue
 from functools import partial
@@ -247,7 +248,8 @@ class IRCClient:
         """
         Send a CTCP request to the specified target (user or channel).
         """
-        message = f'\x01{command}'
+        timestamp = str(int(time.time()))  # Get the current timestamp
+        message = f'\x01{command} {timestamp}'
         if parameter:
             message += f' {parameter}'
         message += '\x01'
@@ -1069,8 +1071,8 @@ class IRCClient:
         elif sys.platform == "win32":
             # Windows-specific notification using winsound
             import winsound
-            duration = 1000  # milliseconds
-            frequency = 440  # Hz
+            duration = 75  # milliseconds
+            frequency = 1200  # Hz
             winsound.Beep(frequency, duration)
         else:
             # For other platforms, print a message
@@ -1109,14 +1111,14 @@ class IRCClient:
         os.makedirs(logs_directory, exist_ok=True)
 
         filename = f'{logs_directory}/irc_log_{self.sanitize_channel_name(channel)}.txt'
-        with open(filename, 'a') as file:
+        with open(filename, 'a', encoding="utf-8") as file:
             file.write(log_line)
 
     def save_friend_list(self):
         """
         save Friend list!
         """
-        with open("friend_list.txt", "w") as f:
+        with open("friend_list.txt", "w", encoding='utf-8') as f:
             for user in self.friend_list:
                 f.write(f"{user}\n")
 
@@ -1125,14 +1127,14 @@ class IRCClient:
         load Friend list!
         """
         if os.path.exists("friend_list.txt"):
-            with open("friend_list.txt", "r") as f:
+            with open("friend_list.txt", "r", encoding='utf-8') as f:
                 self.friend_list = [line.strip() for line in f.readlines()]
 
     def save_ignore_list(self):
         """
         saves ignore list
         """
-        with open("ignore_list.txt", "w") as f:
+        with open("ignore_list.txt", "w", encoding='utf-8') as f:
             for item in self.ignore_list:
                 f.write(f"{item}\n")
 
@@ -1141,7 +1143,7 @@ class IRCClient:
         loads ignore list
         """
         if os.path.exists("ignore_list.txt"):
-            with open("ignore_list.txt", "r") as f:
+            with open("ignore_list.txt", "r", encoding='utf-8') as f:
                 self.ignore_list = [line.strip() for line in f.readlines()]
 
     def save_channel_list_to_file(self):
@@ -1151,7 +1153,7 @@ class IRCClient:
         current_directory = os.getcwd()
         file_path = os.path.join(current_directory, 'channel_list.txt')
         
-        with open(file_path, 'w') as f:
+        with open(file_path, 'w', encoding='utf-8') as f:
             for channel in self.channel_list:
                 f.write(f"Channel: {channel['name']}, Users: {channel['users']}, Topic: {channel['topic']}\n")
         
@@ -1245,7 +1247,8 @@ class IRCClientGUI:
         self.root = tk.Tk()
         self.root.title("RudeChat")
         self.root.geometry("1200x800")
-        self.icon_image = tk.PhotoImage(file=os.path.join(os.getcwd(), "rude.png"))
+        icon_image = Image.open("rude.ico")
+        self.icon_image = ImageTk.PhotoImage(icon_image)
         self.root.iconphoto(True, self.icon_image)
         self.selected_channel = None
         self.menu_bar = tk.Menu(self.root)
@@ -1255,11 +1258,11 @@ class IRCClientGUI:
         self.settings_menu.add_command(label="Configure", command=self.open_config_window)
         self.settings_menu.add_command(label="Reload Macros", command=self.reload_ascii_macros)
 
-        default_font = self.current_config.get("font_family", "Liberation Mono")
+        default_font = self.current_config.get("font_family", "Hack")
         default_size = int(self.current_config.get("font_size", 10))
         self.chat_font = tkFont.Font(family=default_font, size=default_size)
-        self.channel_user_list_font = tkFont.Font(family="DejaVu Sans Mono", size=9)
-        self.server_font = tkFont.Font(family="DejaVu Sans Mono", size=9)
+        self.channel_user_list_font = tkFont.Font(family="Hack", size=9)
+        self.server_font = tkFont.Font(family="Hack", size=9)
 
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
         current_font = self.server_feedback_text.cget("font")
@@ -1365,7 +1368,7 @@ class IRCClientGUI:
             else:
                 message = f"You've been pinged in {channel_name}!"
 
-        icon_path = os.path.join(os.getcwd(), "rude.png")
+        icon_path = os.path.abspath("rude.ico")
 
         try:
             # Desktop Notification
@@ -1383,7 +1386,7 @@ class IRCClientGUI:
         ascii_macros = {}
         for file in os.listdir(self.ASCII_ART_DIRECTORY):
             if file.endswith(".txt"):
-                with open(os.path.join(self.ASCII_ART_DIRECTORY, file), 'r') as f:
+                with open(os.path.join(self.ASCII_ART_DIRECTORY, file), 'r', encoding='utf-8') as f:
                     macro_name, _ = os.path.splitext(file) 
                     ascii_macros[macro_name] = f.read()
         return ascii_macros
@@ -2509,12 +2512,15 @@ class ConfigWindow(tk.Toplevel):
 
 class ChannelListWindow(tk.Toplevel):
     def __init__(self, file_path, *args, **kwargs):
-        super(ChannelListWindow, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.title("Channel List")
         self.geometry("790x375")
         self.is_destroyed = False
 
-        # Create a treeview to display the channels without the tree column
+        self.create_widgets()
+        self.start_download_thread(file_path)
+
+    def create_widgets(self):
         self.tree = ttk.Treeview(self, columns=("Channel", "Users", "Topic"), show='headings')
         self.tree.heading("Channel", text="Channel")
         self.tree.heading("Users", text="Users")
@@ -2523,21 +2529,22 @@ class ChannelListWindow(tk.Toplevel):
         self.close_button = ttk.Button(self, text="Close", command=self.destroy)
         self.close_button.grid(row=1, column=0, columnspan=2, pady=10, padx=10, sticky="ew")
 
-        # Create a scrollbar
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=self.scrollbar.set)
 
-        # Position the treeview and scrollbar using grid
         self.tree.grid(row=0, column=0, sticky="nsew")
         self.scrollbar.grid(row=0, column=1, sticky="ns")
 
-        # Configure the grid to expand properly
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        # Read the data from the file and insert into the treeview
+    def start_download_thread(self, file_path):
+        download_thread = threading.Thread(target=self.read_and_insert_data, args=(file_path,), daemon=True)
+        download_thread.start()
+
+    def read_and_insert_data(self, file_path):
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(f, start=1):
                     parts = line.strip().split(", ")
                     if len(parts) < 3:
@@ -2550,18 +2557,17 @@ class ChannelListWindow(tk.Toplevel):
                         topic = parts[2].split(": ")[1] if len(parts[2].split(": ")) > 1 else "No topic"
                         if channel_name == "*":
                             channel_name = "Hidden"
-                    except Exception as e:  # Catch any kind of exception
+                    except Exception as e:
                         print(f"Error processing line {line_num} due to {e}: {line}")
                         continue
 
-                    # Check if the window is destroyed before inserting
                     if not self.is_destroyed:
-                        self.tree.insert("", "end", values=(channel_name, user_count, topic))
+                        self.after(0, lambda cn=channel_name, uc=user_count, t=topic: self.tree.insert("", "end", values=(cn, uc, t)))
         except Exception as e:
             print(f"Error reading the file {file_path} due to {e}")
 
     def destroy(self):
-        self.is_destroyed = True  # Set the flag when the window is being destroyed
+        self.is_destroyed = True
         super().destroy()
 
 def main():
