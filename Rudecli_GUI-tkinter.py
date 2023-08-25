@@ -41,7 +41,6 @@ import logging
 import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkFont
-from PIL import Image, ImageTk
 from plyer import notification
 from queue import Queue
 from functools import partial
@@ -248,8 +247,7 @@ class IRCClient:
         """
         Send a CTCP request to the specified target (user or channel).
         """
-        timestamp = str(int(time.time()))  # Get the current timestamp
-        message = f'\x01{command} {timestamp}'
+        message = f'\x01{command}'
         if parameter:
             message += f' {parameter}'
         message += '\x01'
@@ -1071,8 +1069,8 @@ class IRCClient:
         elif sys.platform == "win32":
             # Windows-specific notification using winsound
             import winsound
-            duration = 75  # milliseconds
-            frequency = 1200  # Hz
+            duration = 1000  # milliseconds
+            frequency = 440  # Hz
             winsound.Beep(frequency, duration)
         else:
             # For other platforms, print a message
@@ -1111,14 +1109,14 @@ class IRCClient:
         os.makedirs(logs_directory, exist_ok=True)
 
         filename = f'{logs_directory}/irc_log_{self.sanitize_channel_name(channel)}.txt'
-        with open(filename, 'a', encoding="utf-8") as file:
+        with open(filename, 'a') as file:
             file.write(log_line)
 
     def save_friend_list(self):
         """
         save Friend list!
         """
-        with open("friend_list.txt", "w", encoding='utf-8') as f:
+        with open("friend_list.txt", "w") as f:
             for user in self.friend_list:
                 f.write(f"{user}\n")
 
@@ -1127,14 +1125,14 @@ class IRCClient:
         load Friend list!
         """
         if os.path.exists("friend_list.txt"):
-            with open("friend_list.txt", "r", encoding='utf-8') as f:
+            with open("friend_list.txt", "r") as f:
                 self.friend_list = [line.strip() for line in f.readlines()]
 
     def save_ignore_list(self):
         """
         saves ignore list
         """
-        with open("ignore_list.txt", "w", encoding='utf-8') as f:
+        with open("ignore_list.txt", "w") as f:
             for item in self.ignore_list:
                 f.write(f"{item}\n")
 
@@ -1143,7 +1141,7 @@ class IRCClient:
         loads ignore list
         """
         if os.path.exists("ignore_list.txt"):
-            with open("ignore_list.txt", "r", encoding='utf-8') as f:
+            with open("ignore_list.txt", "r") as f:
                 self.ignore_list = [line.strip() for line in f.readlines()]
 
     def save_channel_list_to_file(self):
@@ -1153,7 +1151,7 @@ class IRCClient:
         current_directory = os.getcwd()
         file_path = os.path.join(current_directory, 'channel_list.txt')
         
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(file_path, 'w') as f:
             for channel in self.channel_list:
                 f.write(f"Channel: {channel['name']}, Users: {channel['users']}, Topic: {channel['topic']}\n")
         
@@ -1247,8 +1245,7 @@ class IRCClientGUI:
         self.root = tk.Tk()
         self.root.title("RudeChat")
         self.root.geometry("1200x800")
-        icon_image = Image.open("rude.ico")
-        self.icon_image = ImageTk.PhotoImage(icon_image)
+        self.icon_image = tk.PhotoImage(file=os.path.join(os.getcwd(), "rude.png"))
         self.root.iconphoto(True, self.icon_image)
         self.selected_channel = None
         self.menu_bar = tk.Menu(self.root)
@@ -1258,11 +1255,11 @@ class IRCClientGUI:
         self.settings_menu.add_command(label="Configure", command=self.open_config_window)
         self.settings_menu.add_command(label="Reload Macros", command=self.reload_ascii_macros)
 
-        default_font = self.current_config.get("font_family", "Hack")
+        default_font = self.current_config.get("font_family", "Liberation Mono")
         default_size = int(self.current_config.get("font_size", 10))
         self.chat_font = tkFont.Font(family=default_font, size=default_size)
-        self.channel_user_list_font = tkFont.Font(family="Hack", size=9)
-        self.server_font = tkFont.Font(family="Hack", size=9)
+        self.channel_user_list_font = tkFont.Font(family="DejaVu Sans Mono", size=9)
+        self.server_font = tkFont.Font(family="DejaVu Sans Mono", size=9)
 
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
         current_font = self.server_feedback_text.cget("font")
@@ -1368,7 +1365,7 @@ class IRCClientGUI:
             else:
                 message = f"You've been pinged in {channel_name}!"
 
-        icon_path = os.path.abspath("rude.ico")
+        icon_path = os.path.join(os.getcwd(), "rude.png")
 
         try:
             # Desktop Notification
@@ -1386,7 +1383,7 @@ class IRCClientGUI:
         ascii_macros = {}
         for file in os.listdir(self.ASCII_ART_DIRECTORY):
             if file.endswith(".txt"):
-                with open(os.path.join(self.ASCII_ART_DIRECTORY, file), 'r', encoding='utf-8') as f:
+                with open(os.path.join(self.ASCII_ART_DIRECTORY, file), 'r') as f:
                     macro_name, _ = os.path.splitext(file) 
                     ascii_macros[macro_name] = f.read()
         return ascii_macros
@@ -2569,7 +2566,7 @@ class ChannelListWindow(tk.Toplevel):
     def destroy(self):
         self.is_destroyed = True
         super().destroy()
-
+        
 def main():
     """The Main Function for the RudeChat IRC Client."""
     config_file = 'conf.rude'
