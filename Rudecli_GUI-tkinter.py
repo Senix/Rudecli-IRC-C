@@ -37,6 +37,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 from functools import partial
@@ -1653,9 +1654,9 @@ class IRCClientGUI:
                 self.irc_client.send_message('LIST')
             case "mac":
                 self.handle_mac_command(args)
-            case "cowsay":
+            case "syscowsay":
                 self.handle_cowsay_command(args)
-            case "fortune":
+            case "sysfortune":
                 self.handle_fortune_command(args[1:])
             case "roll":  
                 self.dice_roll(args)
@@ -1669,9 +1670,82 @@ class IRCClientGUI:
                 self.handle_invite_command(args)
             case "kick":
                 self.handle_kick_command(args)
+            case "fortune":
+                file_name_arg = args[1] if len(args) > 1 else None
+                self.fortune(file_name_arg)
+            case "cowsay":
+                file_name_arg = args[1] if len(args) > 1 else None
+                self.fortune_cowsay(file_name_arg)
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
         self.input_entry.delete(0, tk.END)
+
+    def cowsay(self, message, width=100):
+        """Formats the given message in a 'cowsay' format."""
+        wrapped_message = textwrap.wrap(message, width)
+        
+        # Combine the wrapped lines into a single string
+        combined_message = '\n'.join([f"< {line} >".center(len(line) + 2) for line in wrapped_message])
+        
+        # Find the longest line to adjust the borders accordingly
+        max_line_length = max(len(line) for line in combined_message.split('\n'))
+        
+        top_border = ' ' + '_' * (max_line_length)
+        bottom_border = ' ' + '-' * (max_line_length)
+
+        cow = """
+               \\   ^__^
+                \\  (oo)\\_______
+                   (__)\\       )\\/\\
+                       ||----w |
+                       ||     ||
+        """
+        
+        return f"{top_border}\n{combined_message}\n{bottom_border}{cow}"
+
+    def wrap_text(self, text, width=100):
+        """Dont spam that channel"""
+        return textwrap.fill(text, width)
+
+    def get_fortune_file(self, file_name=None):
+        """Returns the provided file_name if valid or a random file from the fortune directory."""
+        fortune_directory = os.path.join(os.getcwd(), "Fortune Lists")
+        fortune_files = [os.path.join(fortune_directory, f) for f in os.listdir(fortune_directory) if f.endswith('.txt')]
+
+        # Compute the potential path based on the provided file_name
+        potential_path = os.path.join(fortune_directory, f"{file_name}.txt") if file_name else None
+        
+        # Check if the potential path is in the list of fortune_files
+        if potential_path and potential_path in fortune_files:
+            return potential_path
+        else:
+            return random.choice(fortune_files)
+
+    def fortune_cowsay(self, file_name=None):
+        file_name = self.get_fortune_file(file_name)
+
+        with open(file_name, 'r') as f:
+            fortunes = f.read().strip().split('%')
+            chosen_fortune = random.choice(fortunes).strip()
+
+        wrapped_fortune_text = self.wrap_text(chosen_fortune)
+        cowsay_fortune = self.cowsay(wrapped_fortune_text)
+        for line in cowsay_fortune.split('\n'):
+            self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+            self.update_message_text(line + "\r\n")
+            time.sleep(0.3)
+
+    def fortune(self, file_name=None):
+        file_name = self.get_fortune_file(file_name)
+
+        with open(file_name, 'r') as f:
+            fortunes = f.read().strip().split('%')
+            chosen_fortune = random.choice(fortunes).strip()
+
+        for line in chosen_fortune.split('\n'):
+            self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+            self.update_message_text(line + "\r\n")
+            time.sleep(0.3)
 
     def dice_roll(self, args):
         # Default to d20 if no arguments are provided
@@ -1934,11 +2008,14 @@ class IRCClientGUI:
         # === Advanced & Fun Commands ===
         self.update_message_text("\r\n=== Advanced & Fun Commands ===\r\n")
         self.update_message_text(f'/CTCP <nickname> <command> [parameters] - CTCP command, e.g., /CTCP Rudie CLIENTINFO\r\n')
+        self.update_message_text(f'/syscowsay to generate and send a cowsay to the channel\r\n')
         self.update_message_text(f'/cowsay to generate and send a cowsay to the channel\r\n')
+        self.update_message_text(f'/sysfortune to tell fortune. /sysfortune <library> gives a fortune from that library\r\n')
         self.update_message_text(f'/fortune to tell fortune. /fortune <library> gives a fortune from that library\r\n')
         self.update_message_text(f'/exec command will run the following command on your machine and output to the channel youre in\r\n')
         self.update_message_text(f'Example: /exec ping -c 1 www.google.com\r\n')
-        self.update_message_text(f'Note: cowsay & fortune will only work if you have both installed\r\n')
+        self.update_message_text(f'Note: syscowsay & sysfortune will only work if you have both installed on your LINUX system\r\n')
+        self.update_message_text(f'Note: cowsay & fortune are internal within the client and will pull from the Fortune Lists folder\r\n')
 
     def format_message_for_display(self, message):
         # Remove color codes
