@@ -41,7 +41,6 @@ import logging
 import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkFont
-from PIL import Image, ImageTk
 from plyer import notification
 from queue import Queue
 from functools import partial
