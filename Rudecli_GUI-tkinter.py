@@ -1069,8 +1069,8 @@ class IRCClient:
         elif sys.platform == "win32":
             # Windows-specific notification using winsound
             import winsound
-            duration = 1000  # milliseconds
-            frequency = 440  # Hz
+            duration = 75  # milliseconds
+            frequency = 1200  # Hz
             winsound.Beep(frequency, duration)
         else:
             # For other platforms, print a message
@@ -1109,14 +1109,14 @@ class IRCClient:
         os.makedirs(logs_directory, exist_ok=True)
 
         filename = f'{logs_directory}/irc_log_{self.sanitize_channel_name(channel)}.txt'
-        with open(filename, 'a') as file:
+        with open(filename, 'a', encoding='utf-8') as file:
             file.write(log_line)
 
     def save_friend_list(self):
         """
         save Friend list!
         """
-        with open("friend_list.txt", "w") as f:
+        with open("friend_list.txt", "w", encoding='utf-8') as f:
             for user in self.friend_list:
                 f.write(f"{user}\n")
 
@@ -1125,14 +1125,14 @@ class IRCClient:
         load Friend list!
         """
         if os.path.exists("friend_list.txt"):
-            with open("friend_list.txt", "r") as f:
+            with open("friend_list.txt", "r", encoding='utf-8') as f:
                 self.friend_list = [line.strip() for line in f.readlines()]
 
     def save_ignore_list(self):
         """
         saves ignore list
         """
-        with open("ignore_list.txt", "w") as f:
+        with open("ignore_list.txt", "w", encoding='utf-8') as f:
             for item in self.ignore_list:
                 f.write(f"{item}\n")
 
@@ -1141,8 +1141,15 @@ class IRCClient:
         loads ignore list
         """
         if os.path.exists("ignore_list.txt"):
-            with open("ignore_list.txt", "r") as f:
+            with open("ignore_list.txt", "r", encoding='utf-8') as f:
                 self.ignore_list = [line.strip() for line in f.readlines()]
+
+    def reload_ignore_list(self):
+        self.ignore_list = []
+        if os.path.exists("ignore_list.txt"):
+            with open("ignore_list.txt", "r", encoding='utf-8') as f:
+                self.ignore_list = [line.strip() for line in f.readlines()]
+                self.irc_client_gui.update_message_text(f"Ignore List reloaded C:<\r\n")
 
     def save_channel_list_to_file(self):
         """
@@ -1151,7 +1158,7 @@ class IRCClient:
         current_directory = os.getcwd()
         file_path = os.path.join(current_directory, 'channel_list.txt')
         
-        with open(file_path, 'w') as f:
+        with open(file_path, 'w', encoding='utf-8') as f:
             for channel in self.channel_list:
                 f.write(f"Channel: {channel['name']}, Users: {channel['users']}, Topic: {channel['topic']}\n")
         
@@ -1245,7 +1252,7 @@ class IRCClientGUI:
         self.root = tk.Tk()
         self.root.title("RudeChat")
         self.root.geometry("1200x800")
-        self.icon_image = tk.PhotoImage(file=os.path.join(os.getcwd(), "rude.png"))
+        self.icon_image = tk.PhotoImage(file=os.path.abspath("rude.png"))
         self.root.iconphoto(True, self.icon_image)
         self.selected_channel = None
         self.menu_bar = tk.Menu(self.root)
@@ -1254,12 +1261,13 @@ class IRCClientGUI:
         self.menu_bar.add_cascade(label="Settings", menu=self.settings_menu)
         self.settings_menu.add_command(label="Configure", command=self.open_config_window)
         self.settings_menu.add_command(label="Reload Macros", command=self.reload_ascii_macros)
+        self.settings_menu.add_command(label="Reload Ignore List", command=self.irc_client.reload_ignore_list)
 
-        default_font = self.current_config.get("font_family", "Liberation Mono")
+        default_font = self.current_config.get("font_family", "Hack")
         default_size = int(self.current_config.get("font_size", 10))
         self.chat_font = tkFont.Font(family=default_font, size=default_size)
-        self.channel_user_list_font = tkFont.Font(family="DejaVu Sans Mono", size=9)
-        self.server_font = tkFont.Font(family="DejaVu Sans Mono", size=9)
+        self.channel_user_list_font = tkFont.Font(family="Hack", size=9)
+        self.server_font = tkFont.Font(family="Hack", size=9)
 
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
         current_font = self.server_feedback_text.cget("font")
@@ -1365,7 +1373,7 @@ class IRCClientGUI:
             else:
                 message = f"You've been pinged in {channel_name}!"
 
-        icon_path = os.path.join(os.getcwd(), "rude.png")
+        icon_path = os.path.abspath("rude.ico")
 
         try:
             # Desktop Notification
@@ -1633,6 +1641,8 @@ class IRCClientGUI:
                 self.handle_cowsay_command(args)
             case "fortune":
                 self.handle_fortune_command(args[1:])
+            case "roll":  
+                self.dice_roll(args)
             case "exec":
                 self._handle_exec_command(args)
             case "mode":
@@ -1646,6 +1656,33 @@ class IRCClientGUI:
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
         self.input_entry.delete(0, tk.END)
+
+    def dice_roll(self, args):
+        # Default to d20 if no arguments are provided
+        die_type = "d20" if len(args) < 2 else args[1].lower()
+        
+        if die_type not in ["d4", "d6", "d8", "d10", "d100", "d12", "d20"]:
+            self.update_message_text(f"Invalid die type: {die_type}. Supported dice: d4, d6, d8, d10, d100, d12, d20\r\n")
+            return
+
+        # Map the die type to its maximum value
+        dice_map = {
+            "d4": 4,
+            "d6": 6,
+            "d8": 8,
+            "d10": 10,
+            "d100": 100,
+            "d12": 12,
+            "d20": 20
+        }
+
+        number = random.randint(1, dice_map[die_type])
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
+
+        action_message = f"\x01ACTION rolled a {number} on a {die_type}\x01"
+
+        self.update_message_text(action_message)
+        self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{action_message}')
 
     def handle_who_command(self, args):
         """
