@@ -1252,8 +1252,8 @@ class IRCClientGUI:
         self.root = tk.Tk()
         self.root.title("RudeChat")
         self.root.geometry("1200x800")
-        self.icon_image = tk.PhotoImage(file=os.path.abspath("rude.png"))
-        self.root.iconphoto(True, self.icon_image)
+        self.icon_image = os.path.abspath("rude.ico")
+        self.root.iconbitmap(True, self.icon_image)
         self.selected_channel = None
         self.menu_bar = tk.Menu(self.root)
         self.root.config(menu=self.menu_bar)
