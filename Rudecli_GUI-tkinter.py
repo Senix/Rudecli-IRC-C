@@ -35,6 +35,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import platform
 import threading
 import time
 import logging
