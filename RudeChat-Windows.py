@@ -1146,6 +1146,13 @@ class IRCClient:
             with open("ignore_list.txt", "r", encoding='utf-8') as f:
                 self.ignore_list = [line.strip() for line in f.readlines()]
 
+    def reload_ignore_list(self):
+        self.ignore_list = []
+        if os.path.exists("ignore_list.txt"):
+            with open("ignore_list.txt", "r", encoding='utf-8') as f:
+                self.ignore_list = [line.strip() for line in f.readlines()]
+                self.irc_client_gui.update_message_text(f"Ignore List reloaded C:<")
+
     def save_channel_list_to_file(self):
         """
         Save the channel list data to a file.
@@ -1247,9 +1254,8 @@ class IRCClientGUI:
         self.root = tk.Tk()
         self.root.title("RudeChat")
         self.root.geometry("1200x800")
-        icon_image = Image.open("rude.ico")
-        self.icon_image = ImageTk.PhotoImage(icon_image)
-        self.root.iconphoto(True, self.icon_image)
+        self.icon_image = os.path.abspath("rude.ico")
+        self.root.iconbitmap(True, self.icon_image)
         self.selected_channel = None
         self.menu_bar = tk.Menu(self.root)
         self.root.config(menu=self.menu_bar)
@@ -1257,6 +1263,7 @@ class IRCClientGUI:
         self.menu_bar.add_cascade(label="Settings", menu=self.settings_menu)
         self.settings_menu.add_command(label="Configure", command=self.open_config_window)
         self.settings_menu.add_command(label="Reload Macros", command=self.reload_ascii_macros)
+        self.settings_menu.add_command(label="Reload Ignore List", command=self.irc_client.reload_ignore_list)
 
         default_font = self.current_config.get("font_family", "Hack")
         default_size = int(self.current_config.get("font_size", 10))
@@ -1636,6 +1643,8 @@ class IRCClientGUI:
                 self.handle_cowsay_command(args)
             case "fortune":
                 self.handle_fortune_command(args[1:])
+            case "roll":  
+                self.dice_roll(args)
             case "exec":
                 self._handle_exec_command(args)
             case "mode":
@@ -1649,6 +1658,33 @@ class IRCClientGUI:
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
         self.input_entry.delete(0, tk.END)
+
+    def dice_roll(self, args):
+        # Default to d20 if no arguments are provided
+        die_type = "d20" if len(args) < 2 else args[1].lower()
+        
+        if die_type not in ["d4", "d6", "d8", "d10", "d100", "d12", "d20"]:
+            self.update_message_text(f"Invalid die type: {die_type}. Supported dice: d4, d6, d8, d10, d100, d12, d20\r\n")
+            return
+
+        # Map the die type to its maximum value
+        dice_map = {
+            "d4": 4,
+            "d6": 6,
+            "d8": 8,
+            "d10": 10,
+            "d100": 100,
+            "d12": 12,
+            "d20": 20
+        }
+
+        number = random.randint(1, dice_map[die_type])
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
+
+        action_message = f"\x01ACTION rolled a {number} on a {die_type}\x01"
+
+        self.update_message_text(action_message)
+        self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{action_message}')
 
     def handle_who_command(self, args):
         """
