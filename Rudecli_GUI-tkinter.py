@@ -1655,9 +1655,9 @@ class IRCClientGUI:
             case "mac":
                 self.handle_mac_command(args)
             case "syscowsay":
-                self.handle_cowsay_command(args)
+                self.handle_syscowsay_command(args)
             case "sysfortune":
-                self.handle_fortune_command(args[1:])
+                self.handle_sysfortune_command(args[1:])
             case "roll":  
                 self.dice_roll(args)
             case "exec":
@@ -1674,8 +1674,20 @@ class IRCClientGUI:
                 file_name_arg = args[1] if len(args) > 1 else None
                 self.fortune(file_name_arg)
             case "cowsay":
-                file_name_arg = args[1] if len(args) > 1 else None
-                self.fortune_cowsay(file_name_arg)
+                if len(args) > 1:
+                    file_name_arg = args[1]
+                    # Construct the potential file path
+                    potential_path = os.path.join(os.getcwd(), "Fortune Lists", f"{file_name_arg}.txt")
+
+                    # Check if the provided argument corresponds to a valid fortune file
+                    if os.path.exists(potential_path):
+                        self.fortune_cowsay(file_name_arg)
+                    else:
+                        # If not a valid file name, consider the rest of the arguments as a custom message
+                        custom_message = ' '.join(args[1:])
+                        self.cowsay_custom_message(custom_message)
+                else:
+                    self.fortune_cowsay()
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
         self.input_entry.delete(0, tk.END)
@@ -1731,6 +1743,16 @@ class IRCClientGUI:
         wrapped_fortune_text = self.wrap_text(chosen_fortune)
         cowsay_fortune = self.cowsay(wrapped_fortune_text)
         for line in cowsay_fortune.split('\n'):
+            self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+            self.update_message_text(line + "\r\n")
+            time.sleep(0.3)
+
+    def cowsay_custom_message(self, message):
+        """Wrap a custom message using the cowsay format."""
+        wrapped_message = self.wrap_text(message)
+        cowsay_output = self.cowsay(wrapped_message)
+        
+        for line in cowsay_output.split('\n'):
             self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
             self.update_message_text(line + "\r\n")
             time.sleep(0.3)
@@ -1873,7 +1895,7 @@ class IRCClientGUI:
         else:
             self.update_message_text(f"Unknown ASCII art macro: {macro_name}. Type '/mac' to see available macros.\r\n")
 
-    def handle_cowsay_command(self, args):
+    def handle_syscowsay_command(self, args):
         try:
             # Determine if we're dealing with a category, custom message, or default
             if len(args) == 1:
@@ -1942,7 +1964,7 @@ class IRCClientGUI:
         cowsay_result = subprocess.run(['cowsay', '-W', '100', '-f', 'flaming-sheep'], input=message, capture_output=True, text=True)
         return cowsay_result.stdout
 
-    def handle_fortune_command(self, args=[]):
+    def handle_sysfortune_command(self, args=[]):
         import shlex
         try:
             # Build the fortune command with the given arguments.
