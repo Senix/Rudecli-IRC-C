@@ -24,30 +24,33 @@ ssl_enabled = True needs port 6697(usually)
 """
 
 
+# Python standard libraries
 import configparser
 import datetime
 import fnmatch
-import irctokens
+import logging
 import os
+import platform
 import random
 import re
 import socket
 import ssl
 import subprocess
 import sys
-import platform
 import threading
 import time
-import logging
-import tkinter as tk
-from tkinter import ttk
-import tkinter.font as tkFont
-from plyer import notification
-from queue import Queue
 from functools import partial
-from tkinter import messagebox, scrolledtext, Menu
-from tkinter.constants import *
+from queue import Queue
 
+# Third-party libraries
+import irctokens
+import tkinter as tk
+from plyer import notification
+from tkinter import messagebox, scrolledtext, Menu, ttk
+import tkinter.font as tkFont
+
+# Local application/library specific imports
+from tkinter.constants import *
 
 class IRCClient:
     MAX_MESSAGE_HISTORY_SIZE = 200
@@ -698,7 +701,11 @@ class IRCClient:
                 whois_response = f"WHOIS for {nickname}:\n"
                 for key, value in self.whois_data[nickname].items():
                     whois_response += f"{key}: {value}\n"
-                whois_response += "\n"
+
+                # Generate and append the /ignore suggestion
+                ignore_suggestion = f"*!{self.whois_data[nickname]['Username']}@{self.whois_data[nickname]['Hostname']}"
+                whois_response += f"\nSuggested /ignore mask: {ignore_suggestion}\n"
+
                 self.irc_client_gui.update_message_text(whois_response)
 
     def handle_nickname_conflict(self, tokens):
@@ -1147,10 +1154,8 @@ class IRCClient:
 
     def reload_ignore_list(self):
         self.ignore_list = []
-        if os.path.exists("ignore_list.txt"):
-            with open("ignore_list.txt", "r", encoding='utf-8') as f:
-                self.ignore_list = [line.strip() for line in f.readlines()]
-                self.irc_client_gui.update_message_text(f"Ignore List reloaded C:<\r\n")
+        self.load_ignore_list()
+        self.irc_client_gui.update_message_text(f"Ignore List reloaded C:<\r\n")
 
     def save_channel_list_to_file(self):
         """
@@ -1595,7 +1600,7 @@ class IRCClientGUI:
             case "clear": #Clears the screen
                 self.clear_chat_window()
             case "ignore": #ignores a user
-                user_to_ignore = user_input.split()[1]
+                user_to_ignore = " ".join(user_input.split()[1:])
                 if user_to_ignore:
                     if user_to_ignore not in self.irc_client.ignore_list:
                         self.irc_client.ignore_list.append(user_to_ignore)
@@ -1672,10 +1677,6 @@ class IRCClientGUI:
         # Default to d20 if no arguments are provided
         die_type = "d20" if len(args) < 2 else args[1].lower()
         
-        if die_type not in ["d4", "d6", "d8", "d10", "d100", "d12", "d20"]:
-            self.update_message_text(f"Invalid die type: {die_type}. Supported dice: d4, d6, d8, d10, d100, d12, d20\r\n")
-            return
-
         # Map the die type to its maximum value
         dice_map = {
             "d4": 4,
@@ -1684,15 +1685,26 @@ class IRCClientGUI:
             "d10": 10,
             "d100": 100,
             "d12": 12,
-            "d20": 20
+            "d20": 20,
+            "d120": 120
         }
 
-        number = random.randint(1, dice_map[die_type])
+        # Check if the die_type is in the predefined dice_map or if it's a custom dice size (e.g., d25, d30, etc.)
+        if die_type in dice_map:
+            max_value = dice_map[die_type]
+        elif re.match(r'd(\d+)', die_type):
+            max_value = int(re.match(r'd(\d+)', die_type).group(1))
+        else:
+            self.update_message_text(f"Invalid die type: {die_type}.\r\n")
+            return
+
+        number = random.randint(1, max_value)
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
 
         action_message = f"\x01ACTION rolled a {number} on a {die_type}\x01"
+        display_message = f"{timestamp} * {self.irc_client.nickname} rolled a {number} on a {die_type}"
 
-        self.update_message_text(action_message)
+        self.update_message_text(display_message + "\r\n")
         self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{action_message}')
 
     def handle_who_command(self, args):
