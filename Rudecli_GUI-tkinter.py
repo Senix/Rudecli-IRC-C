@@ -935,7 +935,6 @@ class IRCClient:
 
     def handle_ctcp_request(self, sender, message_content):
         # Split the CTCP message content at the first space to separate the command from any data
-        print(f"Handling CTCP request from {sender}: {message_content}")
         ctcp_parts = message_content[1:-1].split(" ", 1)
         ctcp_command = ctcp_parts[0]
 
@@ -950,16 +949,16 @@ class IRCClient:
             self.send_message(f'NOTICE {sender} :{ctcp_response}')
 
         elif ctcp_command == "TIME":
-            # Respond to TIME request
-            time_reply = "\x01TIME " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\x01"
+            import pytz
+            dublin_tz = pytz.timezone('Europe/Dublin')
+            dublin_time = datetime.datetime.now(dublin_tz).strftime("%Y-%m-%d %H:%M:%S")
+            time_reply = "\x01TIME " + dublin_time + "\x01"
             self.send_message(f'NOTICE {sender} :{time_reply}')
 
         elif ctcp_command == "PING":
             if len(ctcp_parts) > 1:
                 ping_data = ctcp_parts[1]
                 ping_reply = "\x01PING " + ping_data + "\x01"
-                print("Received CTCP PING request:", message_content)
-                print("Sending CTCP PING reply:", ping_reply)
                 self.send_message(f'NOTICE {sender} :{ping_reply}')
             else:
                 print("Received PING CTCP request without timestamp/data.")
@@ -981,7 +980,6 @@ class IRCClient:
                 self.sound_ctcp_count += 1
                 # SOUND CTCP can include a file or description of the sound. This is just for logging.
                 sound_data = ctcp_parts[1] if len(ctcp_parts) > 1 else "Unknown sound"
-                print(f"Received SOUND CTCP: BEEP!")
                 self.trigger_beep_notification()
             else:
                 print("SOUND CTCP limit reached. Ignoring...")
@@ -1245,6 +1243,31 @@ class IRCClient:
 
 class IRCClientGUI:
     def __init__(self, irc_client):
+        # Initialize attributes
+        self.init_attributes(irc_client)
+        
+        # Set up the main GUI window
+        self.setup_main_window()
+        
+        # Configure fonts and other styles
+        self.configure_styles()
+        
+        # Set up the menu
+        self.setup_menu()
+        
+        # Create and configure GUI widgets
+        self.create_widgets()
+        
+        # Set up layout
+        self.setup_layout()
+        
+        # Bind events
+        self.bind_events()
+        
+        # Start threads
+        self.start_threads()
+
+    def init_attributes(self, irc_client):
         self.irc_client = irc_client
         self.exit_event = irc_client.exit_event
         self.channels_with_mentions = []
@@ -1253,9 +1276,10 @@ class IRCClientGUI:
         self.current_channel = None
         self.ASCII_ART_DIRECTORY = os.path.join(os.getcwd(), "Art")
         self.ASCII_ART_MACROS = self.load_ascii_art_macros()
-
         self.current_config = self.load_config()
+        self.selected_channel = None
 
+    def setup_main_window(self):
         self.root = tk.Tk()
         self.root.title("RudeChat")
         self.root.geometry("1200x800")
@@ -1264,14 +1288,18 @@ class IRCClientGUI:
         if platform.system() == "Windows":
             self.icon_image = os.path.abspath("rude.ico")
             self.root.iconbitmap(True, self.icon_image)
-        elif platform.system() == "Linux":
-            self.icon_image = tk.PhotoImage(file=os.path.abspath("rude.png"))
-            self.root.iconphoto(True, self.icon_image)
         else:
             self.icon_image = tk.PhotoImage(file=os.path.abspath("rude.png"))
             self.root.iconphoto(True, self.icon_image)
-        
-        self.selected_channel = None
+            
+    def configure_styles(self):
+        default_font = self.current_config.get("font_family", "Hack")
+        default_size = int(self.current_config.get("font_size", 10))
+        self.chat_font = tkFont.Font(family=default_font, size=default_size)
+        self.channel_user_list_font = tkFont.Font(family="Hack", size=9)
+        self.server_font = tkFont.Font(family="Hack", size=9)
+
+    def setup_menu(self):
         self.menu_bar = tk.Menu(self.root)
         self.root.config(menu=self.menu_bar)
         self.settings_menu = tk.Menu(self.menu_bar, tearoff=0)
@@ -1280,75 +1308,62 @@ class IRCClientGUI:
         self.settings_menu.add_command(label="Reload Macros", command=self.reload_ascii_macros)
         self.settings_menu.add_command(label="Reload Ignore List", command=self.irc_client.reload_ignore_list)
 
-        default_font = self.current_config.get("font_family", "Hack")
-        default_size = int(self.current_config.get("font_size", 10))
-        self.chat_font = tkFont.Font(family=default_font, size=default_size)
-        self.channel_user_list_font = tkFont.Font(family="Hack", size=9)
-        self.server_font = tkFont.Font(family="Hack", size=9)
-
+    def create_widgets(self):
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
         current_font = self.server_feedback_text.cget("font")
         self.server_feedback_text.tag_configure("bold", font=(current_font, 10, "bold")) 
-        self.server_feedback_text.tag_configure("bold", font=(current_font, 10, "bold"))
         self.server_feedback_text.tag_configure("italic", font=(current_font, 10, "italic"))
         self.server_feedback_text.tag_configure("bold_italic", font=(current_font, 10, "bold italic"))
-        self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
-        self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff") 
+        self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff")
+        self.bold_font = ("Hack", 10, "bold")
+        self.italic_font = ("Hack", 10, "italic")
+        self.bold_italic_font = ("Hack", 10, "bold italic") 
 
         self.paned_window = tk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        self.paned_window.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
-
         self.message_frame = tk.Frame(self.paned_window, bg="black")
-        self.paned_window.add(self.message_frame)
-
-        self.message_text = scrolledtext.ScrolledText(self.message_frame, state=tk.DISABLED, bg="black", cursor="arrow", font=self.chat_font)
-        self.message_text.pack(fill=tk.BOTH, expand=True)
-
+        self.message_text = scrolledtext.ScrolledText(self.message_frame, state=tk.DISABLED, bg="black", fg="#C0FFEE", cursor="arrow", font=self.chat_font)
         self.user_list_frame = tk.Frame(self.paned_window, width=20, height=400, bg="black")
-        self.paned_window.add(self.user_list_frame)
-
         self.user_list_label = tk.Label(self.user_list_frame, text="Users:", bg="black", fg="#39ff14")
-        self.user_list_label.pack()
-
         self.user_list_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#39ff14", cursor="arrow", font=self.channel_user_list_font)
-        self.user_list_text.pack(fill=tk.BOTH, expand=True)
-
         self.joined_channels_label = tk.Label(self.user_list_frame, text="Channels:", bg="black", fg="#00bfff")
-        self.joined_channels_label.pack()
-
         self.joined_channels_text = scrolledtext.ScrolledText(self.user_list_frame, width=5, height=20, bg="black", fg="#ffffff", cursor="arrow", font=self.channel_user_list_font)
-        self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
-
         self.input_frame = tk.Frame(self.root)
-        self.input_frame.grid(row=2, column=0, sticky="ew", padx=1, pady=1)
-
         self.nickname_label = tk.Label(self.input_frame, font=("Hack", 9, "italic"), text=f" $ {self.irc_client.nickname} #> ")
-        self.nickname_label.pack(side=tk.LEFT)
-
         self.input_entry = tk.Entry(self.input_frame)
-        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.input_entry.bind("<Return>", self.handle_input)
-        self.input_entry.bind("<Tab>", self.handle_tab_complete)
-
         self.exit_button = tk.Button(self.input_frame, text="Exit", command=self.handle_exit)
-        self.exit_button.pack(side=tk.RIGHT)
 
+    def setup_layout(self):
+        self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
+        self.paned_window.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+        self.paned_window.add(self.message_frame)
+        self.message_text.pack(fill=tk.BOTH, expand=True)
+        self.paned_window.add(self.user_list_frame)
+        self.user_list_label.pack()
+        self.user_list_text.pack(fill=tk.BOTH, expand=True)
+        self.joined_channels_label.pack()
+        self.joined_channels_text.pack(fill=tk.BOTH, expand=True)
+        self.input_frame.grid(row=2, column=0, sticky="ew", padx=1, pady=1)
+        self.nickname_label.pack(side=tk.LEFT)
+        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.exit_button.pack(side=tk.RIGHT)
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_rowconfigure(1, weight=0) 
         self.root.grid_columnconfigure(0, weight=1)
 
+    def bind_events(self):
+        self.input_entry.bind("<Return>", self.handle_input)
+        self.input_entry.bind("<Tab>", self.handle_tab_complete)
+        self.joined_channels_text.bind("<Button-1>", self.switch_channel)
+        self.joined_channels_text.bind("<B1-Motion>", lambda event: "break")
+        self.joined_channels_text.bind("<ButtonRelease-1>", lambda event: "break")
         self.root.bind("<Configure>", self.delayed_sash_position)
         self.last_width = self.root.winfo_width()
 
+    def start_threads(self):
         self.client_start_thread = threading.Thread(target=self.irc_client.start)
         self.client_start_thread.daemon = True 
         self.client_start_thread.start()
         self.irc_client.irc_client_gui = self
-
-        self.joined_channels_text.bind("<Button-1>", self.switch_channel)
-        self.joined_channels_text.bind("<B1-Motion>", lambda event: "break")
-        self.joined_channels_text.bind("<ButtonRelease-1>", lambda event: "break")
-        self.init_input_menu()
 
     def delayed_sash_position(self, event):
         # Cancel any previous delayed adjustments
@@ -1692,27 +1707,50 @@ class IRCClientGUI:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
         self.input_entry.delete(0, tk.END)
 
-    def cowsay(self, message, width=100):
+    def cowsay(self, message):
         """Formats the given message in a 'cowsay' format."""
-        wrapped_message = textwrap.wrap(message, width)
-        
-        # Combine the wrapped lines into a single string
-        combined_message = '\n'.join([f"< {line} >".center(len(line) + 2) for line in wrapped_message])
-        
-        # Find the longest line to adjust the borders accordingly
+
+        # Find the longest line in the input message to determine the maximum width.
+        max_line_length = max(len(line) for line in message.split('\n'))
+        # Adjust for the added spaces and border characters
+        adjusted_width = max_line_length - 4  # 2 for initial and end space + 2 for border characters
+
+        # Manually split lines to check for one-word lines.
+        raw_lines = message.split('\n')
+        wrapped_lines = []
+        for line in raw_lines:
+            if len(line.split()) == 1:  # Single word line
+                wrapped_lines.append(line)
+            else:
+                wrapped_lines.extend(textwrap.wrap(line, adjusted_width))
+
+        # Format lines using cowsay style.
+        if len(wrapped_lines) == 1:
+            # Special case: single line message.
+            combined_message = f"/ {wrapped_lines[0].ljust(adjusted_width)} \\"
+        else:
+            lines = [f"/ {wrapped_lines[0].ljust(adjusted_width)} \\"]
+            for line in wrapped_lines[1:-1]:
+                lines.append(f"| {line.ljust(adjusted_width)} |")
+            lines.append(f"\\ {wrapped_lines[-1].ljust(adjusted_width)} /")
+            combined_message = '\n'.join(lines)
+
+        # Find the longest line again (after formatting) to adjust the borders accordingly.
         max_line_length = max(len(line) for line in combined_message.split('\n'))
+
+        top_border = ' ' + '_' * (max_line_length - 2)
         
-        top_border = ' ' + '_' * (max_line_length)
-        bottom_border = ' ' + '-' * (max_line_length)
+        # Set the bottom border to match the max line length
+        bottom_border = ' ' + '-' * (max_line_length - 2)
 
         cow = """
-               \\   ^__^
-                \\  (oo)\\_______
-                   (__)\\       )\\/\\
-                       ||----w |
-                       ||     ||
+            \   ^__^
+             \  (oo)\\_______
+                (__)\       )\\/\\
+                    ||----w |
+                    ||     ||
         """
-        
+
         return f"{top_border}\n{combined_message}\n{bottom_border}{cow}"
 
     def wrap_text(self, text, width=100):
@@ -1758,6 +1796,7 @@ class IRCClientGUI:
             time.sleep(0.3)
 
     def fortune(self, file_name=None):
+        """Choose a random fortune from one of the lists"""
         file_name = self.get_fortune_file(file_name)
 
         with open(file_name, 'r') as f:
@@ -2041,12 +2080,12 @@ class IRCClientGUI:
 
     def format_message_for_display(self, message):
         # Remove color codes
-        message = re.sub(r'\x03(\d{1,2}(,\d{1,2})?)?', '', message)
-        
+        message_no_colors = re.sub(r'\x03(\d{1,2}(,\d{1,2})?)?', '', message)
+
         # Define patterns for bold, italic, and reset
         bold_pattern = r'\x02(.*?)(?:\x02|\x0F|$)'  # Modified to make the closing code optional and also check for end of string
         italic_pattern = r'\x1D(.*?)(?:\x1D|\x0F|$)'  # Modified similarly
-        
+
         # Function to extract ranges from matches
         def get_ranges(pattern, msg):
             ranges = []
@@ -2060,17 +2099,17 @@ class IRCClientGUI:
                         break
             return ranges
 
-        bold_ranges = get_ranges(bold_pattern, message)
-        italic_ranges = get_ranges(italic_pattern, message)
-        
+        bold_ranges = get_ranges(bold_pattern, message_no_colors)
+        italic_ranges = get_ranges(italic_pattern, message_no_colors)
+
         # For bold-italic, we'll look for overlapping ranges
         bold_italic_ranges = set([(b_start, b_end) for b_start, b_end in bold_ranges 
                                   for i_start, i_end in italic_ranges 
                                   if b_start <= i_start and b_end >= i_end])
 
         # Remove the formatting characters to get the formatted message
-        formatted_message = re.sub(r'[\x02\x1D\x0F]', '', message)
-        
+        formatted_message = re.sub(r'[\x02\x1D\x0F]', '', message_no_colors)
+
         return formatted_message, bold_ranges, italic_ranges, list(bold_italic_ranges)
 
     def display_dm_messages(self, user):
@@ -2380,15 +2419,13 @@ class IRCClientGUI:
                 # Move the start index to after the current found channel to continue the search
                 start_idx = end_idx
 
-        formatted_message, bold_ranges, italic_ranges, bold_italic_ranges = self.format_message_for_display(cleaned_formatted_text)
-
         # Apply bold formatting
         for start, end in bold_ranges:
             if (start, end) not in bold_italic_ranges:  
                 start_idx = f"{start_insert_index}+{start}c"
                 end_idx = f"{start_insert_index}+{end}c"
                 self.message_text.tag_add("bold", start_idx, end_idx)
-                self.message_text.tag_configure("bold", weight="bold")
+                self.message_text.tag_configure("bold", font=self.bold_font)
 
         # Apply italic formatting
         for start, end in italic_ranges:
@@ -2396,18 +2433,26 @@ class IRCClientGUI:
                 start_idx = f"{start_insert_index}+{start}c"
                 end_idx = f"{start_insert_index}+{end}c"
                 self.message_text.tag_add("italic", start_idx, end_idx)
-                self.message_text.tag_configure("italic", slant="italic")
+                self.message_text.tag_configure("italic", font=self.italic_font)
 
         # Apply bold-italic formatting
         for start, end in bold_italic_ranges:
             start_idx = f"{start_insert_index}+{start}c"
             end_idx = f"{start_insert_index}+{end}c"
             self.message_text.tag_add("bold_italic", start_idx, end_idx)
-            self.message_text.tag_configure("bold_italic", weight="bold", slant="italic")
+            self.message_text.tag_configure("bold_italic", font=self.bold_italic_font)
+
+        # Adjusting tag priorities at the end
+        if self.message_text.tag_ranges("bold_italic"):
+            self.message_text.tag_raise("bold_italic")
+        if self.message_text.tag_ranges("bold"):
+            self.message_text.tag_raise("bold")
+        if self.message_text.tag_ranges("italic"):
+            self.message_text.tag_raise("italic")
 
         # apply #C0FFEE text color
-        self.message_text.tag_configure("brightgreen", foreground="#C0FFEE")
-        self.message_text.tag_add("brightgreen", "1.0", "end")
+        #self.message_text.tag_configure("brightgreen", foreground="#C0FFEE")
+        #self.message_text.tag_add("brightgreen", "1.0", "end")
 
     def display_channel_messages(self):
         """
@@ -2706,7 +2751,6 @@ class ChannelListWindow(tk.Toplevel):
                     if len(parts) < 3:
                         print(f"Skipping malformed line at Line {line_num}: {line}")
                         continue
-
                     try:
                         channel_name = parts[0].split(": ")[1]
                         user_count = parts[1].split(": ")[1]
