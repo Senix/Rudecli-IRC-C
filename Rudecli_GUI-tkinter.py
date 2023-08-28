@@ -2358,8 +2358,8 @@ class IRCClientGUI:
         user_input = self.input_entry.get()
         cursor_pos = self.input_entry.index(tk.INSERT)
 
-        # Get the last word (partial nick) before the cursor
-        match = re.search(r'\b\w+$', user_input[:cursor_pos])
+        # Update the regex to match alphanumeric, underscores, dashes, and caret
+        match = re.search(r'\b[\w\-^]+$', user_input[:cursor_pos])
         if not match:
             return
         partial_nick = match.group()
