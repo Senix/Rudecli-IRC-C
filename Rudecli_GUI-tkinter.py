@@ -1850,9 +1850,9 @@ class IRCClientGUI:
         bottom_border = ' ' + '-' * (max_line_length - 2)
 
         cow = """
-            \   ^__^
-             \  (oo)\\_______
-                (__)\       )\\/\\
+            \\   ^__^
+             \\  (oo)\\_______
+                (__)\\       )\\/\\
                     ||----w |
                     ||     ||"""
 
@@ -2316,13 +2316,10 @@ class IRCClientGUI:
                 self.update_window_title(self.irc_client.nickname, self.irc_client.current_channel)  # using the actual current channel or DM
 
         ascii_art = """
-
         .-.-.
-       (_\|/_)
-       ( /|\ )    
-        '-'-'`-._
-
-        """
+       (_\\|/_)
+       ( /|\\ )    
+        '-'-'`-._"""
         
         # Add the ASCII art at the end
         self.joined_channels_text.insert(tk.END, "\n" + ascii_art)
@@ -2358,8 +2355,8 @@ class IRCClientGUI:
         user_input = self.input_entry.get()
         cursor_pos = self.input_entry.index(tk.INSERT)
 
-        # Update the regex to match alphanumeric, underscores, dashes, and caret
-        match = re.search(r'\b[\w\-^]+$', user_input[:cursor_pos])
+        # Update the regex to match alphanumeric, underscores, dashes, square brackets, curly braces, backslash, backticks, and pipes
+        match = re.search(r'\b[\w\-[\]{}\\`|]+$', user_input[:cursor_pos])
         if not match:
             return
         partial_nick = match.group()
@@ -2401,7 +2398,7 @@ class IRCClientGUI:
 
         # Prevent default behavior of the Tab key
         return 'break'
-
+    
     def append_colon_to_nick(self):
         current_text = self.input_entry.get()
         self.input_entry.delete(0, tk.END)
