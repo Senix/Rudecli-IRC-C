@@ -1018,13 +1018,6 @@ class IRCClient:
                 return f'<{sender}> {message_content}'
         return None  # No standard message to display
 
-    def _format_ctcp_action(self, sender, message_content):
-        """Convert CTCP ACTION messages to a readable format."""
-        if message_content.startswith("\x01ACTION ") and message_content.endswith("\x01"):
-            action_content = message_content[8:-1]  # Strip \x01ACTION and trailing \x01
-            return f"* {action_content}"  # Removed sender
-        return f"<{sender}> {message_content}"
-
     def start_reset_timer(self):
         # If the flag isn't set, don't start the timer
         if not self.sound_ctcp_limit_flag:
@@ -2406,7 +2399,7 @@ class IRCClientGUI:
         self.joined_channels_text.tag_configure("selected", background="#2375b3")
         self.joined_channels_text.tag_configure("mentioned", background="red")
         self.joined_channels_text.tag_configure("activity", background="green")
-        self.joined_channels_text.tag_configure("green_text", foreground="green")
+        self.joined_channels_text.tag_configure("green_text", foreground="#39ff14")
         
         # Set certain tags to raise over others.
         self.joined_channels_text.tag_raise("selected")
@@ -2443,7 +2436,7 @@ class IRCClientGUI:
         self.joined_channels_text.insert(tk.END, "\n" + ascii_art)
         start_index = self.joined_channels_text.index(tk.END + "- {} lines linestart".format(ascii_art.count("\n") + 1))
         end_index = self.joined_channels_text.index(tk.END)
-        self.joined_channels_text.tag_add("green_text", start_index, end_index)  # Step 2: Apply the green_text tag to the ASCII art
+        self.joined_channels_text.tag_add("green_text", start_index, end_index)
 
         self.joined_channels_text.config(state=tk.DISABLED)
 
@@ -2515,7 +2508,7 @@ class IRCClientGUI:
             self.tab_complete_index = (self.tab_complete_index + 1) % len(self.tab_complete_completions)
 
         # Set up a timer to append ": " after half a second if no more tab presses
-        self.tab_completion_timer = self.root.after(500, self.append_colon_to_nick)
+        self.tab_completion_timer = self.root.after(250, self.append_colon_to_nick)
 
         # Prevent default behavior of the Tab key
         return 'break'
