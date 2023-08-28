@@ -2354,9 +2354,6 @@ class IRCClientGUI:
         """
         Tab complete with cycling through possible matches.
         """
-        # Cancel any previous timers
-        if hasattr(self, 'tab_completion_timer'):
-            self.root.after_cancel(self.tab_completion_timer)
         # Get the current input in the input entry field
         user_input = self.input_entry.get()
         cursor_pos = self.input_entry.index(tk.INSERT)
@@ -2366,6 +2363,10 @@ class IRCClientGUI:
         if not match:
             return
         partial_nick = match.group()
+
+        # Cancel any previous timers
+        if hasattr(self, 'tab_completion_timer'):
+            self.root.after_cancel(self.tab_completion_timer)
 
         # Get the user list for the current channel
         current_channel = self.irc_client.current_channel
@@ -2377,10 +2378,13 @@ class IRCClientGUI:
         # Remove @ and + symbols from nicknames
         user_list_cleaned = [nick.lstrip('@+') for nick in user_list]
 
-        if not hasattr(self, 'tab_complete_completions'):
-            # Find possible completions for the partial nick
+        # Initialize or update completions list
+        if not hasattr(self, 'tab_complete_completions') or not hasattr(self, 'last_tab_time') or (time.time() - self.last_tab_time) > 1.0:
             self.tab_complete_completions = [nick for nick in user_list_cleaned if nick.startswith(partial_nick)]
             self.tab_complete_index = 0
+
+        # Update the time of the last tab press
+        self.last_tab_time = time.time()
 
         if self.tab_complete_completions:
             # Fetch the next completion
@@ -2391,9 +2395,6 @@ class IRCClientGUI:
             self.input_entry.insert(0, completed_text)
             # Cycle to the next completion
             self.tab_complete_index = (self.tab_complete_index + 1) % len(self.tab_complete_completions)
-        else:
-            delattr(self, 'tab_complete_completions')
-            delattr(self, 'tab_complete_index')
 
         # Set up a timer to append ": " after half a second if no more tab presses
         self.tab_completion_timer = self.root.after(500, self.append_colon_to_nick)
