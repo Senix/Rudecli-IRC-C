@@ -846,83 +846,104 @@ class IRCClient:
         # Update server feedback
         self.irc_client_gui.update_server_feedback_text(raw_message)
 
+    def should_ignore_message(self, hostmask, sender):
+        """Determine if a message should be ignored."""
+        return self.should_ignore(hostmask) or sender in self.ignore_list
+
+    def format_received_message(self, message_content, sender):
+        """Format the received message."""
+        if message_content.startswith("\x01ACTION ") and message_content.endswith("\x01"):
+            action_content = message_content[8:-1]
+            return f"* {sender} {action_content}"
+        return message_content
+
+    def handle_dm(self, sender, formatted_message, timestamp):
+        """Handle Direct Messages (DMs)."""
+        if sender not in self.dm_users:
+            self.dm_users.append(sender)
+        if formatted_message.startswith('* '):
+            received_dm = f"{timestamp} {formatted_message}\n"
+        else:
+            received_dm = f"{timestamp} <{sender}> {formatted_message}\n"
+        self.log_message(f"{sender}", sender, formatted_message)
+        if sender not in self.dm_messages:
+            self.dm_messages[sender] = []
+        self.dm_messages[sender].append(received_dm)
+
+        # Check if this DM is already in the channels_with_activity list
+        dm_name = f"DM: {sender}"
+        if dm_name not in self.irc_client_gui.channels_with_activity:
+            self.irc_client_gui.channels_with_activity.append(dm_name)
+        self.irc_client_gui.update_joined_channels_list(dm_name)
+
+        # Only display the DM in the GUI if the currently selected channel is the DM from this sender
+        if self.current_channel == sender:
+            self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
+
+        # Handling CTCP requests here, inside the DM section
+        if formatted_message.startswith("\x01") and formatted_message.endswith("\x01"):
+            received_message = self.handle_ctcp_request(sender, formatted_message)
+            if received_message:
+                if sender not in self.dm_messages:
+                    self.dm_messages[sender] = []
+                self.dm_messages[sender].append((timestamp, received_message))
+
+    def handle_channel_message(self, target, sender, formatted_message, timestamp):
+        """Handle channel messages."""
+        self.log_message(target, sender, formatted_message, is_sent=False)
+        
+        # Prepare the formatted message for display
+        if formatted_message.startswith("* "):
+            # For ACTION messages
+            display_message = f'{timestamp} {formatted_message}\n'
+        else:
+            # For regular messages
+            display_message = f'{timestamp} <{sender}> {formatted_message}\n'
+        
+        # Update the GUI if the message's channel is the current channel
+        if self.irc_client_gui.current_channel == target:
+            self.irc_client_gui.update_message_text(display_message)
+
+        if sender == self.nickname:
+            return
+
+        if self.nickname in formatted_message:
+            self.trigger_beep_notification(channel_name=target, message_content=formatted_message)
+            if target not in self.irc_client_gui.channels_with_mentions:
+                self.irc_client_gui.channels_with_mentions.append(target)
+                self.irc_client_gui.update_joined_channels_list(target)
+
+        if target not in self.irc_client_gui.channels_with_activity:
+            self.irc_client_gui.channels_with_activity.append(target)
+            self.irc_client_gui.update_joined_channels_list(target)
+
+        if target not in self.channel_messages:
+            self.channel_messages[target] = []
+
+        self.channel_messages[target].append((timestamp, sender, formatted_message))
+
     def handle_privmsg(self, tokens, timestamp):
+        """Main function to handle private messages."""
         target = tokens.params[0]
         message_content = tokens.params[1]
 
         # Constructing the hostmask from the given token attributes
         hostmask = f"{tokens.hostmask.nickname}!{tokens.hostmask.username}@{tokens.hostmask.hostname}"
         sender = tokens.hostmask.nickname  # Define the sender here
-        received_messages = ""
 
-        # Check if the message should be ignored based on hostmask or sender nickname
-        if self.should_ignore(hostmask) or sender in self.ignore_list:
+        # Check if the message should be ignored
+        if self.should_ignore_message(hostmask, sender):
             return
 
-        # Format the message content based on whether it's a CTCP ACTION
-        if message_content.startswith("\x01ACTION ") and message_content.endswith("\x01"):
-            action_content = message_content[8:-1]
-            formatted_message = f"* {sender} {action_content}"
-        else:
-            formatted_message = message_content
+        # Format the message content
+        formatted_message = self.format_received_message(message_content, sender)
 
         if target == self.nickname:
             # This is a DM
-            if sender not in self.dm_users:
-                self.dm_users.append(sender)
-            if formatted_message.startswith('* '):
-                received_dm = f"{timestamp} {formatted_message}\n"
-            else:
-                received_dm = f"{timestamp} <{sender}> {formatted_message}\n"
-            self.log_message(f"{sender}", sender, formatted_message)
-            if sender not in self.dm_messages:
-                self.dm_messages[sender] = []
-            self.dm_messages[sender].append(received_dm)
-            # Check if this DM is already in the channels_with_activity list
-            dm_name = f"DM: {sender}"
-            if dm_name not in self.irc_client_gui.channels_with_activity:
-                self.irc_client_gui.channels_with_activity.append(dm_name)
-
-            # Update the channels list in the GUI every time a DM is received
-            self.irc_client_gui.update_joined_channels_list(dm_name)
-            # Only display the DM in the GUI if the currently selected channel is the DM from this sender
-            if self.current_channel == sender:
-                self.irc_client_gui.update_message_text(received_dm, sender=sender, is_dm=True)
-
-            # Handling CTCP requests here, inside the DM section
-            if message_content.startswith("\x01") and message_content.endswith("\x01"):
-                received_message = self.handle_ctcp_request(sender, message_content)
-                if received_message:
-                    if target not in self.dm_messages:
-                        self.dm_messages[target] = []
-                    self.dm_messages[target].append((timestamp, received_message))
+            self.handle_dm(sender, formatted_message, timestamp)
         else:
             # This is a channel message
-            self.log_message(target, sender, formatted_message, is_sent=False)
-            if sender == self.nickname:
-                return
-            if self.nickname in message_content:
-                self.trigger_beep_notification(channel_name=target, message_content=message_content)
-                if target not in self.irc_client_gui.channels_with_mentions:
-                    self.irc_client_gui.channels_with_mentions.append(target)
-                    self.irc_client_gui.update_joined_channels_list(target)
-            if target not in self.irc_client_gui.channels_with_activity:
-                self.irc_client_gui.channels_with_activity.append(target)
-                self.irc_client_gui.update_joined_channels_list(target)
-            if target not in self.channel_messages:
-                self.channel_messages[target] = []
-            if formatted_message.startswith("* "):
-                # For ACTION messages
-                self.channel_messages[target].append((timestamp, formatted_message))
-                if target == self.current_channel:
-                    received_messages += f'{timestamp} {formatted_message}\n'
-            else:
-                # For regular messages
-                self.channel_messages[target].append((timestamp, sender, formatted_message))
-                if target == self.current_channel:
-                    received_messages += f'{timestamp} <{sender}> {formatted_message}\n'
-            
-        return received_messages
+            self.handle_channel_message(target, sender, formatted_message, timestamp)
 
     def handle_default_case(self, raw_message):
         if raw_message.startswith(':'):
@@ -1444,12 +1465,9 @@ class IRCClientGUI:
 
     def init_channel_menu(self):
         """
-        Right click menu for the channel list.
+        Initialize right-click menu for the channel list.
         """
         self.channel_menu = Menu(self.joined_channels_text, tearoff=0)
-        self.channel_menu.add_command(label="Leave Channel", command=self.handle_leave_channel)
-        self.channel_menu.add_command(label="Close Query", command=self.close_query)
-
         self.joined_channels_text.bind("<Button-3>", self.show_channel_menu)
 
     def handle_leave_channel(self):
@@ -1464,6 +1482,16 @@ class IRCClientGUI:
         try:
             # Get the channel name where the user right-clicked
             self.selected_channel = self.joined_channels_text.get("current linestart", "current lineend").strip()
+            
+            # Clear the existing menu items
+            self.channel_menu.delete(0, 'end')
+
+            if self.selected_channel.startswith("DM:"):  # If it's a DM
+                self.channel_menu.add_command(label="Close Query", command=self.close_query)
+            else:  # If it's a regular channel
+                self.channel_menu.add_command(label="Leave Channel", command=self.handle_leave_channel)
+
+            # Display the context menu
             if self.selected_channel:
                 self.channel_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -1528,15 +1556,22 @@ class IRCClientGUI:
             self.update_message_text(f"You already have a DM opened with {target_user}.\r\n")
 
     def close_query(self):
-        target_user = self.selected_nick
-        if target_user in self.irc_client.dm_users:
-            self.irc_client.dm_users.remove(target_user)
-            if target_user in self.irc_client.dm_messages:
-                del self.irc_client.dm_messages[target_user]  # Remove chat history
-            self.update_message_text(f"DM closed with {target_user}.\r\n")
-            self.update_joined_channels_list(None)  # Call the update method to refresh the GUI
+        target_channel = self.selected_channel
+
+        # Check if the selected channel is a DM
+        if target_channel.startswith("DM:"):
+            target_user = target_channel.split("DM:")[1].strip()  # Extract the username from the "DM:username" format
+            
+            if target_user in self.irc_client.dm_users:
+                self.irc_client.dm_users.remove(target_user)
+                if target_user in self.irc_client.dm_messages:
+                    del self.irc_client.dm_messages[target_user]  # Remove chat history
+                self.update_message_text(f"DM closed with {target_user}.\r\n")
+                self.update_joined_channels_list(None)
+            else:
+                self.update_message_text(f"You don't have a DM opened with {target_user}.\r\n")
         else:
-            self.update_message_text(f"You don't have a DM opened with {target_user}.\r\n")
+            pass
 
     def open_config_window(self):
         config_window = ConfigWindow(self.current_config)
@@ -2047,7 +2082,7 @@ class IRCClientGUI:
 
     def handle_kick_command(self, args):
         if len(args) < 3:
-            self.update_message_text("Usage: /kick <user> <channel> [reason]")
+            self.update_message_text("Usage: /kick <user> <channel> [reason]\r\n")
             return
         user = args[1]
         channel = args[2]
@@ -2058,29 +2093,29 @@ class IRCClientGUI:
 
     def handle_invite_command(self, args):
         if len(args) < 3:
-            self.update_message_text("Usage: /invite <user> <channel>")
+            self.update_message_text("Usage: /invite <user> <channel>\r\n")
             return
         user = args[1]
         channel = args[2]
-        self.irc_client.send_message(f'INVITE {user} {channel}')
+        self.irc_client.send_message(f'INVITE {user} {channel}\r\n')
         self.update_message_text(f"Invited {user} to {channel}\r\n")
 
     def handle_mode_command(self, args):
         if len(args) < 3:
-            self.update_message_text("Usage: /mode <target> <mode>")
+            self.update_message_text("Usage: /mode <target> <mode>\r\n")
             return
         target = args[1]
         mode = args[2]
-        self.irc_client.send_message(f'MODE {target} {mode}')
-        self.update_message_text(f"Set mode {mode} for {target}")
+        self.irc_client.send_message(f'MODE {target} {mode}\r\n')
+        self.update_message_text(f"Set mode {mode} for {target}\r\n")
 
     def handle_notice_command(self, args):
         if len(args) < 3:
-            self.update_message_text("Usage: /notice <target> <message>")
+            self.update_message_text("Usage: /notice <target> <message>\r\n")
             return
         target = args[1]
         message = ' '.join(args[2:])
-        self.irc_client.send_message(f'NOTICE {target} :{message}')
+        self.irc_client.send_message(f'NOTICE {target} :{message}\r\n')
         self.update_message_text(f"Sent NOTICE to {target}: {message}\r\n")
 
     def _handle_exec_command(self, args):
@@ -2281,7 +2316,7 @@ class IRCClientGUI:
                 end = match.end()
                 for group in match.groups():
                     if group is not None:
-                        end = start + len(group) + 2  # +2 to account for the format chars
+                        end = start + len(group) + 2  
                         ranges.append((start, end - 1))
                         break
             return ranges
@@ -2371,6 +2406,7 @@ class IRCClientGUI:
         self.joined_channels_text.tag_configure("selected", background="#2375b3")
         self.joined_channels_text.tag_configure("mentioned", background="red")
         self.joined_channels_text.tag_configure("activity", background="green")
+        self.joined_channels_text.tag_configure("green_text", foreground="green")
         
         # Set certain tags to raise over others.
         self.joined_channels_text.tag_raise("selected")
@@ -2405,6 +2441,9 @@ class IRCClientGUI:
         
         # Add the ASCII art at the end
         self.joined_channels_text.insert(tk.END, "\n" + ascii_art)
+        start_index = self.joined_channels_text.index(tk.END + "- {} lines linestart".format(ascii_art.count("\n") + 1))
+        end_index = self.joined_channels_text.index(tk.END)
+        self.joined_channels_text.tag_add("green_text", start_index, end_index)  # Step 2: Apply the green_text tag to the ASCII art
 
         self.joined_channels_text.config(state=tk.DISABLED)
 
