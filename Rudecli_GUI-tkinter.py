@@ -1101,16 +1101,28 @@ class IRCClient:
         # Split the message into lines
         lines = message.split("\n")
         
+        # Detect if the message is an action message
+        is_action = lines[0].startswith('* ')
+        
         # Construct the log line
         if is_sent:
-            log_line = f'[{timestamp}] <{self.nickname}> {lines[0]}\n'
+            if is_action:
+                log_line = f'[{timestamp}] {lines[0]}\n'
+            else:
+                log_line = f'[{timestamp}] <{self.nickname}> {lines[0]}\n'
         else:
-            log_line = f'[{timestamp}] <{sender}> {lines[0]}\n'
+            if is_action:
+                log_line = f'[{timestamp}] {lines[0]}\n'
+            else:
+                log_line = f'[{timestamp}] <{sender}> {lines[0]}\n'
         
         # Add the subsequent lines without timestamp
         for line in lines[1:]:
-            log_line += f'           <{sender if is_sent else self.nickname}> {line}\n'
-            
+            if is_action:
+                log_line += f'           {line}\n'
+            else:
+                log_line += f'           <{sender if is_sent else self.nickname}> {line}\n'
+        
         # Create a folder named "Logs" to store the logs
         logs_directory = 'Logs'
         os.makedirs(logs_directory, exist_ok=True)
@@ -1313,6 +1325,7 @@ class IRCClientGUI:
         self.settings_menu.add_command(label="Reload Macros", command=self.reload_ascii_macros)
         self.settings_menu.add_command(label="Reload Ignore List", command=self.irc_client.reload_ignore_list)
         self.settings_menu.add_command(label="Reset Nick Color", command=self.reset_nick_colors)
+        self.settings_menu.add_command(label="Help", command=self.display_help)
 
     def create_widgets(self):
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
