@@ -1424,6 +1424,8 @@ class IRCClientGUI:
     def init_user_menu(self):
         self.user_list_menu = Menu(self.user_list_text, tearoff=0)
         self.user_list_menu.add_command(label="Copy", command=self.copy_text_user)
+        self.user_list_menu.add_command(label="Whois", command=self.handle_whois)
+        self.user_list_menu.add_command(label="Query", command=self.query_user)
 
         self.user_list_text.bind("<Button-3>", self.show_user_list_menu)
 
@@ -1433,12 +1435,17 @@ class IRCClientGUI:
         """
         self.channel_menu = Menu(self.joined_channels_text, tearoff=0)
         self.channel_menu.add_command(label="Leave Channel", command=self.handle_leave_channel)
+        self.channel_menu.add_command(label="Close Query", command=self.close_query)
 
         self.joined_channels_text.bind("<Button-3>", self.show_channel_menu)
 
     def handle_leave_channel(self):
         if self.selected_channel:
             self.irc_client.leave_channel(self.selected_channel)
+
+    def handle_whois(self):
+        if hasattr(self, 'selected_nick') and self.selected_nick:
+            self.irc_client.whois(self.selected_nick)
 
     def show_channel_menu(self, event):
         try:
@@ -1451,7 +1458,10 @@ class IRCClientGUI:
 
     def show_user_list_menu(self, event):
         try:
-            self.user_list_menu.tk_popup(event.x_root, event.y_root)
+            # Get the nickname where the user right-clicked
+            self.selected_nick = self.user_list_text.get("current linestart", "current lineend").strip()
+            if self.selected_nick:
+                self.user_list_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.user_list_menu.grab_release()
 
@@ -1494,6 +1504,26 @@ class IRCClientGUI:
     def select_all_text(self):
         self.input_entry.select_range(0, tk.END)
         self.input_entry.icursor(tk.END)
+
+    def query_user(self):
+        target_user = self.selected_nick
+        if target_user not in self.irc_client.dm_users:
+            self.irc_client.dm_users.append(target_user)
+            self.update_message_text(f"DM opened with {target_user}.\r\n")
+            self.update_joined_channels_list("DM: " + target_user) 
+        else:
+            self.update_message_text(f"You already have a DM opened with {target_user}.\r\n")
+
+    def close_query(self):
+        target_user = self.selected_nick
+        if target_user in self.irc_client.dm_users:
+            self.irc_client.dm_users.remove(target_user)
+            if target_user in self.irc_client.dm_messages:
+                del self.irc_client.dm_messages[target_user]  # Remove chat history
+            self.update_message_text(f"DM closed with {target_user}.\r\n")
+            self.update_joined_channels_list(None)  # Call the update method to refresh the GUI
+        else:
+            self.update_message_text(f"You don't have a DM opened with {target_user}.\r\n")
 
     def open_config_window(self):
         config_window = ConfigWindow(self.current_config)
