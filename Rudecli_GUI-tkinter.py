@@ -1155,6 +1155,8 @@ class IRCClient:
         self.ignore_list = []
         self.load_ignore_list()
         self.irc_client_gui.update_message_text(f"Ignore List reloaded C:<\r\n")
+        for person in self.ignore_list:
+            self.irc_client_gui.update_message_text(f"{person}\r\n")
 
     def save_channel_list_to_file(self):
         """
@@ -1272,12 +1274,15 @@ class IRCClientGUI:
         self.exit_event = irc_client.exit_event
         self.channels_with_mentions = []
         self.channels_with_activity = []
+        self.input_history = []
         self.nickname_colors = {}
         self.current_channel = None
         self.ASCII_ART_DIRECTORY = os.path.join(os.getcwd(), "Art")
         self.ASCII_ART_MACROS = self.load_ascii_art_macros()
         self.current_config = self.load_config()
         self.selected_channel = None
+        self.history_position = -1  
+        self.MAX_HISTORY = 8  
 
     def setup_main_window(self):
         self.root = tk.Tk()
@@ -1307,6 +1312,7 @@ class IRCClientGUI:
         self.settings_menu.add_command(label="Configure", command=self.open_config_window)
         self.settings_menu.add_command(label="Reload Macros", command=self.reload_ascii_macros)
         self.settings_menu.add_command(label="Reload Ignore List", command=self.irc_client.reload_ignore_list)
+        self.settings_menu.add_command(label="Reset Nick Color", command=self.reset_nick_colors)
 
     def create_widgets(self):
         self.server_feedback_text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, bg="black", fg="#ff0000", height=5, font=self.server_font)
@@ -1331,6 +1337,9 @@ class IRCClientGUI:
         self.nickname_label = tk.Label(self.input_frame, font=("Hack", 9, "italic"), text=f" $ {self.irc_client.nickname} #> ")
         self.input_entry = tk.Entry(self.input_frame)
         self.exit_button = tk.Button(self.input_frame, text="Exit", command=self.handle_exit)
+        self.init_input_menu()
+        self.init_message_menu()
+        self.init_server_menu()
 
     def setup_layout(self):
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
@@ -1353,6 +1362,8 @@ class IRCClientGUI:
     def bind_events(self):
         self.input_entry.bind("<Return>", self.handle_input)
         self.input_entry.bind("<Tab>", self.handle_tab_complete)
+        self.input_entry.bind('<Up>', self.navigate_history)
+        self.input_entry.bind('<Down>', self.navigate_history)
         self.joined_channels_text.bind("<Button-1>", self.switch_channel)
         self.joined_channels_text.bind("<B1-Motion>", lambda event: "break")
         self.joined_channels_text.bind("<ButtonRelease-1>", lambda event: "break")
@@ -1370,13 +1381,80 @@ class IRCClientGUI:
         if hasattr(self, "sash_adjustment_id"):
             self.root.after_cancel(self.sash_adjustment_id)
         # Schedule a new adjustment 100ms in the future
-        self.sash_adjustment_id = self.root.after(100, self.adjust_sash_position)
+        self.sash_adjustment_id = self.root.after(20, self.adjust_sash_position)
 
     def adjust_sash_position(self):
         new_width = self.root.winfo_width()
         if new_width != self.last_width:
             self.paned_window.sash_place(0, new_width - 170, 0)
             self.last_width = new_width
+
+    def init_input_menu(self):
+        """
+        Right click menu.
+        """
+        self.input_menu = Menu(self.input_entry, tearoff=0)
+        self.input_menu.add_command(label="Cut", command=self.cut_text)
+        self.input_menu.add_command(label="Copy", command=self.copy_text)
+        self.input_menu.add_command(label="Paste", command=self.paste_text)
+        self.input_menu.add_command(label="Select All", command=self.select_all_text)
+
+        self.input_entry.bind("<Button-3>", self.show_input_menu)
+
+    def init_message_menu(self):
+        """
+        Right click menu for the main chat window.
+        """
+        self.message_menu = Menu(self.message_text, tearoff=0)
+        self.message_menu.add_command(label="Copy", command=self.copy_text_message)
+        
+        self.message_text.bind("<Button-3>", self.show_message_menu)
+
+    def init_server_menu(self):
+        """
+        Right click menu for the server window.
+        """
+        self.server_menu = Menu(self.server_feedback_text, tearoff=0)
+        self.server_menu.add_command(label="Copy", command=self.copy_text_server)
+
+        self.server_feedback_text.bind("<Button-3>", self.show_server_menu)
+
+    def show_message_menu(self, event):
+        try:
+            self.message_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.message_menu.grab_release()
+
+    def show_input_menu(self, event):
+        try:
+            self.input_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.input_menu.grab_release()
+
+    def show_server_menu(self, event):
+        try:
+            self.server_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.server_menu.grab_release()
+
+    def cut_text(self):
+        self.input_entry.event_generate("<<Cut>>")
+
+    def copy_text(self):
+        self.input_entry.event_generate("<<Copy>>")
+
+    def copy_text_message(self):
+        self.message_text.event_generate("<<Copy>>")
+
+    def copy_text_server(self):
+        self.server_feedback_text.event_generate("<<Copy>>")
+
+    def paste_text(self):
+        self.input_entry.event_generate("<<Paste>>")
+
+    def select_all_text(self):
+        self.input_entry.select_range(0, tk.END)
+        self.input_entry.icursor(tk.END)
 
     def open_config_window(self):
         config_window = ConfigWindow(self.current_config)
@@ -1387,6 +1465,10 @@ class IRCClientGUI:
             self.display_channel_list()
             self.show_channel_list_flag = False
         self.after(100, self.check_for_channel_list_display)
+
+    def reset_nick_colors(self):
+        self.nickname_colors = {}
+        self.update_message_text(f"Nick Colors Reset\r\n")
 
     def trigger_desktop_notification(self, channel_name=None, title="Ping", message_content=None):
         """
@@ -1505,13 +1587,19 @@ class IRCClientGUI:
         if not user_input:
             return  # Exit the method without doing anything if input is empty
         
+        # Add the input to history and adjust the position
+        if len(self.input_history) >= self.MAX_HISTORY:
+            self.input_history.pop(0)  # Remove the oldest entry if history is full
+        self.input_history.append(user_input)
+        self.history_position = len(self.input_history)  # Reset the position to the end
+        
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
         if user_input[0] == "/":
             self._command_parser(user_input, user_input[1:].split()[0])
         else:
             self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{user_input}')
             self.update_message_text(f'{timestamp} <{self.irc_client.nickname}> {user_input}\r\n')
-            self.input_entry.delete(0, tk.END)
+        self.input_entry.delete(0, tk.END)
 
     def _command_parser(self, user_input:str, command: str):
         """
@@ -1707,6 +1795,24 @@ class IRCClientGUI:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
         self.input_entry.delete(0, tk.END)
 
+    def navigate_history(self, event):
+        """Navigate through the input history using the arrow keys."""
+        if event.keysym == 'Up':
+            # Move to the previous history entry
+            self.history_position = max(0, self.history_position - 1)
+            self.show_history_entry()
+        elif event.keysym == 'Down':
+            # Move to the next history entry
+            self.history_position = min(len(self.input_history) - 1, self.history_position + 1)
+            self.show_history_entry()
+
+    def show_history_entry(self):
+        """Display the history entry at the current position in the input field."""
+        if 0 <= self.history_position < len(self.input_history):
+            entry = self.input_history[self.history_position]
+            self.input_entry.delete(0, tk.END)  # Clear current input
+            self.input_entry.insert(tk.END, entry)  # Insert the history entry
+
     def cowsay(self, message):
         """Formats the given message in a 'cowsay' format."""
 
@@ -1748,8 +1854,7 @@ class IRCClientGUI:
              \  (oo)\\_______
                 (__)\       )\\/\\
                     ||----w |
-                    ||     ||
-        """
+                    ||     ||"""
 
         return f"{top_border}\n{combined_message}\n{bottom_border}{cow}"
 
@@ -2247,49 +2352,59 @@ class IRCClientGUI:
 
     def handle_tab_complete(self, event):
         """
-        Tab complete! It's awesome.
+        Tab complete with cycling through possible matches.
         """
-        # get the current input in the input entry field
+        # Cancel any previous timers
+        if hasattr(self, 'tab_completion_timer'):
+            self.root.after_cancel(self.tab_completion_timer)
+        # Get the current input in the input entry field
         user_input = self.input_entry.get()
         cursor_pos = self.input_entry.index(tk.INSERT)
 
-        # get the last word (partial nick) before the cursor
+        # Get the last word (partial nick) before the cursor
         match = re.search(r'\b\w+$', user_input[:cursor_pos])
-        if match:
-            partial_nick = match.group()
-        else:
+        if not match:
             return
+        partial_nick = match.group()
 
-        # get the user list for the current channel
+        # Get the user list for the current channel
         current_channel = self.irc_client.current_channel
         if current_channel in self.irc_client.user_list:
             user_list = self.irc_client.user_list[current_channel]
         else:
             return
 
-        # remove @ and + symbols from nicknames
+        # Remove @ and + symbols from nicknames
         user_list_cleaned = [nick.lstrip('@+') for nick in user_list]
 
-        # find possible completions for the partial nick
-        completions = [nick for nick in user_list_cleaned if nick.startswith(partial_nick)]
+        if not hasattr(self, 'tab_complete_completions'):
+            # Find possible completions for the partial nick
+            self.tab_complete_completions = [nick for nick in user_list_cleaned if nick.startswith(partial_nick)]
+            self.tab_complete_index = 0
 
-        if len(completions) == 1:
-            # if there is a unique match, complete the nick
-            completed_nick = completions[0] + ": "  # append ', ' to the nick
+        if self.tab_complete_completions:
+            # Fetch the next completion
+            completed_nick = self.tab_complete_completions[self.tab_complete_index]
             remaining_text = user_input[cursor_pos:]
             completed_text = user_input[:cursor_pos - len(partial_nick)] + completed_nick + remaining_text
             self.input_entry.delete(0, tk.END)
             self.input_entry.insert(0, completed_text)
-        elif completions:
-            # if there are multiple possible completions, display the common prefix
-            common_prefix = os.path.commonprefix(completions) + ", "  # append ', ' to the prefix
-            remaining_text = user_input[cursor_pos:]
-            completed_text = user_input[:cursor_pos - len(partial_nick)] + common_prefix + remaining_text
-            self.input_entry.delete(0, tk.END)
-            self.input_entry.insert(0, completed_text)
+            # Cycle to the next completion
+            self.tab_complete_index = (self.tab_complete_index + 1) % len(self.tab_complete_completions)
+        else:
+            delattr(self, 'tab_complete_completions')
+            delattr(self, 'tab_complete_index')
 
-        # prevent default behavior of the Tab key
+        # Set up a timer to append ": " after half a second if no more tab presses
+        self.tab_completion_timer = self.root.after(500, self.append_colon_to_nick)
+
+        # Prevent default behavior of the Tab key
         return 'break'
+
+    def append_colon_to_nick(self):
+        current_text = self.input_entry.get()
+        self.input_entry.delete(0, tk.END)
+        self.input_entry.insert(0, current_text + ": ")
 
     def update_window_title(self, nickname, channel_name):
         """
@@ -2496,37 +2611,6 @@ class IRCClientGUI:
                 self.message_text.tag_add("system_message", start_idx, end_idx)
 
         self.root.after(0, _append_message_to_chat)
-
-    def init_input_menu(self):
-        """
-        Right click menu.
-        """
-        self.input_menu = Menu(self.input_entry, tearoff=0)
-        self.input_menu.add_command(label="Cut", command=self.cut_text)
-        self.input_menu.add_command(label="Copy", command=self.copy_text)
-        self.input_menu.add_command(label="Paste", command=self.paste_text)
-        self.input_menu.add_command(label="Select All", command=self.select_all_text)
-
-        self.input_entry.bind("<Button-3>", self.show_input_menu)
-
-    def show_input_menu(self, event):
-        try:
-            self.input_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.input_menu.grab_release()
-
-    def cut_text(self):
-        self.input_entry.event_generate("<<Cut>>")
-
-    def copy_text(self):
-        self.input_entry.event_generate("<<Copy>>")
-
-    def paste_text(self):
-        self.input_entry.event_generate("<<Paste>>")
-
-    def select_all_text(self):
-        self.input_entry.select_range(0, tk.END)
-        self.input_entry.icursor(tk.END)
 
     def find_urls(self, text):
         # A simple regex to detect URLs
