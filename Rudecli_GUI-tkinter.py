@@ -1691,7 +1691,7 @@ class IRCClientGUI:
         """
         This handles the user input, passes to command parser if needed.
         """
-        user_input = self.input_entry.get().strip()
+        user_input = self.input_entry.get()
         
         # Check for empty input
         if not user_input:
@@ -2339,36 +2339,40 @@ class IRCClientGUI:
         """
         This updates the server feedback, it takes into account ascii.
         """
-        message = message.replace('\r', '')
-        formatted_message, bold_ranges, italic_ranges, bold_italic_ranges = self.format_message_for_display(message)
+        def update_text(message_to_update):
+            message_to_update = message_to_update.replace('\r', '')
+            formatted_message, bold_ranges, italic_ranges, bold_italic_ranges = self.format_message_for_display(message_to_update)
 
-        # Insert the message into the Text widget
-        self.server_feedback_text.config(state=tk.NORMAL)
-        start_index = self.server_feedback_text.index(tk.END)  # Get the starting index for this message
-        self.server_feedback_text.insert(tk.END, formatted_message + "\n", "server_feedback")
-        self.server_feedback_text.config(state=tk.DISABLED)
+            # Insert the message into the Text widget
+            self.server_feedback_text.config(state=tk.NORMAL)
+            start_index = self.server_feedback_text.index(tk.END)  # Get the starting index for this message
+            self.server_feedback_text.insert(tk.END, formatted_message + "\n", "server_feedback")
+            self.server_feedback_text.config(state=tk.DISABLED)
 
-        # Apply bold formatting
-        for start, end in bold_ranges:
-            start_bold_index = f"{start_index}+{start}c"
-            end_bold_index = f"{start_index}+{end}c"
-            self.server_feedback_text.tag_add("bold", start_bold_index, end_bold_index)
+            # Apply bold formatting
+            for start, end in bold_ranges:
+                start_bold_index = f"{start_index}+{start}c"
+                end_bold_index = f"{start_index}+{end}c"
+                self.server_feedback_text.tag_add("bold", start_bold_index, end_bold_index)
 
-        # Apply italic formatting
-        for start, end in italic_ranges:
-            start_italic_index = f"{start_index}+{start}c"
-            end_italic_index = f"{start_index}+{end}c"
-            self.server_feedback_text.tag_add("italic", start_italic_index, end_italic_index)
+            # Apply italic formatting
+            for start, end in italic_ranges:
+                start_italic_index = f"{start_index}+{start}c"
+                end_italic_index = f"{start_index}+{end}c"
+                self.server_feedback_text.tag_add("italic", start_italic_index, end_italic_index)
 
-        # Apply bold-italic formatting
-        for start, end in bold_italic_ranges:
-            start_bold_italic_index = f"{start_index}+{start}c"
-            end_bold_italic_index = f"{start_index}+{end}c"
-            self.server_feedback_text.tag_add("bold_italic", start_bold_italic_index, end_bold_italic_index)
+            # Apply bold-italic formatting
+            for start, end in bold_italic_ranges:
+                start_bold_italic_index = f"{start_index}+{start}c"
+                end_bold_italic_index = f"{start_index}+{end}c"
+                self.server_feedback_text.tag_add("bold_italic", start_bold_italic_index, end_bold_italic_index)
 
-        # Ensure the message is visible in the widget
-        self.server_feedback_text.see(tk.END)
-        self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff")  # Make the server output blue
+            # Ensure the message is visible in the widget
+            self.server_feedback_text.see(tk.END)
+            self.server_feedback_text.tag_configure("server_feedback", foreground="#7882ff")  # Make the server output blue
+
+        # Schedule the update_text function to be run in the main thread
+        self.root.after(0, lambda: update_text(message))
 
     def update_user_list(self, channel):
         """
@@ -2470,7 +2474,7 @@ class IRCClientGUI:
         cursor_pos = self.input_entry.index(tk.INSERT)
 
         # Update the regex to match alphanumeric, underscores, dashes, square brackets, curly braces, backslash, backticks, and pipes
-        match = re.search(r'\b[\w\-[\]{}\\`|]+$', user_input[:cursor_pos])
+        match = re.search(r'\b[\]\w\-^[{}\\`|]+$', user_input[:cursor_pos])
         if not match:
             return
         partial_nick = match.group()
