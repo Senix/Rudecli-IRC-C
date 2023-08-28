@@ -1340,6 +1340,8 @@ class IRCClientGUI:
         self.init_input_menu()
         self.init_message_menu()
         self.init_server_menu()
+        self.init_user_menu()
+        self.init_channel_menu()
 
     def setup_layout(self):
         self.server_feedback_text.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
@@ -1419,6 +1421,40 @@ class IRCClientGUI:
 
         self.server_feedback_text.bind("<Button-3>", self.show_server_menu)
 
+    def init_user_menu(self):
+        self.user_list_menu = Menu(self.user_list_text, tearoff=0)
+        self.user_list_menu.add_command(label="Copy", command=self.copy_text_user)
+
+        self.user_list_text.bind("<Button-3>", self.show_user_list_menu)
+
+    def init_channel_menu(self):
+        """
+        Right click menu for the channel list.
+        """
+        self.channel_menu = Menu(self.joined_channels_text, tearoff=0)
+        self.channel_menu.add_command(label="Leave Channel", command=self.handle_leave_channel)
+
+        self.joined_channels_text.bind("<Button-3>", self.show_channel_menu)
+
+    def handle_leave_channel(self):
+        if self.selected_channel:
+            self.irc_client.leave_channel(self.selected_channel)
+
+    def show_channel_menu(self, event):
+        try:
+            # Get the channel name where the user right-clicked
+            self.selected_channel = self.joined_channels_text.get("current linestart", "current lineend").strip()
+            if self.selected_channel:
+                self.channel_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.channel_menu.grab_release()
+
+    def show_user_list_menu(self, event):
+        try:
+            self.user_list_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.user_list_menu.grab_release()
+
     def show_message_menu(self, event):
         try:
             self.message_menu.tk_popup(event.x_root, event.y_root)
@@ -1448,6 +1484,9 @@ class IRCClientGUI:
 
     def copy_text_server(self):
         self.server_feedback_text.event_generate("<<Copy>>")
+
+    def copy_text_user(self):
+        self.user_list_text.event_generate("<<Copy>>")
 
     def paste_text(self):
         self.input_entry.event_generate("<<Paste>>")
@@ -2398,7 +2437,7 @@ class IRCClientGUI:
 
         # Prevent default behavior of the Tab key
         return 'break'
-    
+
     def append_colon_to_nick(self):
         current_text = self.input_entry.get()
         self.input_entry.delete(0, tk.END)
