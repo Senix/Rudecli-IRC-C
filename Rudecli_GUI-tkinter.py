@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 RudeIRC
 RudeIRC assumes conf.rude is available and configed properly:
@@ -124,8 +125,11 @@ class IRCClient:
         Connect to the IRC server
         """
 
-        # Randomly select an ASCII art file from the Splash directory
-        splash_dir = 'Splash'
+        # Get the directory of the current script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+
+        # Set absolute path for the Splash directory
+        splash_dir = os.path.join(script_directory, 'Splash')
         splash_files = [f for f in os.listdir(splash_dir) if os.path.isfile(os.path.join(splash_dir, f))]
         selected_splash_file = random.choice(splash_files)
 
@@ -1296,6 +1300,7 @@ class IRCClientGUI:
         self.start_threads()
 
     def init_attributes(self, irc_client):
+        script_directory = os.path.dirname(os.path.abspath(__file__))
         self.irc_client = irc_client
         self.exit_event = irc_client.exit_event
         self.channels_with_mentions = []
@@ -1303,7 +1308,7 @@ class IRCClientGUI:
         self.input_history = []
         self.nickname_colors = {}
         self.current_channel = None
-        self.ASCII_ART_DIRECTORY = os.path.join(os.getcwd(), "Art")
+        self.ASCII_ART_DIRECTORY = os.path.join(script_directory, 'Art')
         self.ASCII_ART_MACROS = self.load_ascii_art_macros()
         self.current_config = self.load_config()
         self.selected_channel = None
@@ -1311,16 +1316,21 @@ class IRCClientGUI:
         self.MAX_HISTORY = 8  
 
     def setup_main_window(self):
+        """Set up the main window of the GUI."""
+        # Get the directory of the current script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+
         self.root = tk.Tk()
         self.root.title("RudeChat")
         self.root.geometry("1200x800")
-        
+
         # Platform-specific icon setting
         if platform.system() == "Windows":
-            self.icon_image = os.path.abspath("rude.ico")
-            self.root.iconbitmap(True, self.icon_image)
+            icon_path = os.path.join(script_directory, "rude.ico")
+            self.root.iconbitmap(True, icon_path)
         else:
-            self.icon_image = tk.PhotoImage(file=os.path.abspath("rude.png"))
+            icon_path = os.path.join(script_directory, "rude.png")
+            self.icon_image = tk.PhotoImage(file=icon_path)
             self.root.iconphoto(True, self.icon_image)
             
     def configure_styles(self):
@@ -1630,8 +1640,16 @@ class IRCClientGUI:
         return bool(self.root.focus_displayof())
 
     def load_config(self):
+        """Load the configuration file."""
+        # Get the directory of the current script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        
+        # Join the directory with the configuration file name to get the absolute path
+        config_file_path = os.path.join(script_directory, 'conf.rude')
+        
         config = configparser.ConfigParser()
-        config.read("conf.rude") 
+        config.read(config_file_path) 
+        
         return dict(config["IRC"])  #convert config to a dictionary
 
     def switch_channel(self, event):
@@ -2972,10 +2990,13 @@ class ChannelListWindow(tk.Toplevel):
         
 def main():
     """The Main Function for the RudeChat IRC Client."""
-    config_file = 'conf.rude'
+    
+    script_directory = os.path.dirname(os.path.abspath(__file__))
+    
+    config_file_path = os.path.join(script_directory, 'conf.rude')
 
     irc_client = IRCClient()
-    irc_client.read_config(config_file)
+    irc_client.read_config(config_file_path)
 
     gui = IRCClientGUI(irc_client)
     gui.start()
