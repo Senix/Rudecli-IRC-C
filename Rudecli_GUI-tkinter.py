@@ -959,9 +959,22 @@ class IRCClient:
             self.irc_client_gui.update_message_text(raw_message)
 
     def handle_ctcp_request(self, sender, message_content):
+        # List of available CTCP commands
+        available_ctcp_commands = ["VERSION", "CTCP", "TIME", "PING", "FINGER", "CLIENTINFO", "SOUND", "MOO"]
+
         # Split the CTCP message content at the first space to separate the command from any data
         ctcp_parts = message_content[1:-1].split(" ", 1)
         ctcp_command = ctcp_parts[0]
+
+        # Check if the CTCP request has more than one command
+        if ' ' in ctcp_parts[-1]:  # Checking if there's another space in the last part
+            print(f"Ignoring CTCP request with multiple commands from {sender}.")
+            return None
+
+        # Check if the CTCP command is available
+        if ctcp_command not in available_ctcp_commands:
+            print(f"Ignoring unavailable CTCP command '{ctcp_command}' from {sender}.")
+            return None
 
         if ctcp_command == "VERSION":
             # Respond to VERSION request
@@ -990,7 +1003,7 @@ class IRCClient:
 
         elif ctcp_command == "FINGER":
             # Respond to FINGER request (customize as per requirement)
-            version_data = "IRishC v2.6-3"
+            version_data = "IRishC v2.7"
             finger_reply = f"\x01FINGER User: {self.nickname}, {self.server}, {version_data}\x01"
             self.send_message(f'NOTICE {sender} :{finger_reply}')
 
@@ -1011,6 +1024,13 @@ class IRCClient:
                 if not self.sound_ctcp_limit_flag:  # If the flag isn't set yet
                     self.sound_ctcp_limit_flag = True
                     self.start_reset_timer()
+
+        elif ctcp_command == "MOO":
+            moo_reply = "MOO!"
+            version_data = "IRishC v2.7"
+            cow_hello = "Hi Cow!"
+            self.send_message(f'NOTICE {sender} :{moo_reply}, {version_data}, {cow_hello}')
+
         else:
             if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
                 action_content = message_content[8:-1]
@@ -1084,9 +1104,11 @@ class IRCClient:
         """
         You've been pinged! Plays a beep or noise on mention.
         """
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        
         if sys.platform.startswith("linux"):
             # Linux-specific notification sound using paplay
-            sound_path = os.path.join(os.getcwd(), "Sounds", "Notification4.wav")
+            sound_path = os.path.join(script_directory, "Sounds", "Notification4.wav")
             os.system(f"paplay {sound_path}")
         elif sys.platform == "darwin":
             # macOS-specific notification sound using afplay
@@ -1141,11 +1163,18 @@ class IRCClient:
             else:
                 log_line += f'           <{sender if is_sent else self.nickname}> {line}\n'
         
-        # Create a folder named "Logs" to store the logs
-        logs_directory = 'Logs'
+        # Get the directory of the current script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+
+        # Construct the full path for the Logs directory
+        logs_directory = os.path.join(script_directory, 'Logs')
+        
+        # Create the Logs directory if it doesn't exist
         os.makedirs(logs_directory, exist_ok=True)
 
-        filename = f'{logs_directory}/irc_log_{self.sanitize_channel_name(channel)}.txt'
+        # Construct the full path for the log file inside the Logs directory
+        filename = os.path.join(logs_directory, f'irc_log_{self.sanitize_channel_name(channel)}.txt')
+
         with open(filename, 'a', encoding='utf-8') as file:
             file.write(log_line)
 
@@ -1153,7 +1182,14 @@ class IRCClient:
         """
         save Friend list!
         """
-        with open("friend_list.txt", "w", encoding='utf-8') as f:
+        
+        # Get the directory of the current script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+
+        # Construct the full path for the friend_list.txt
+        file_path = os.path.join(script_directory, 'friend_list.txt')
+
+        with open(file_path, "w", encoding='utf-8') as f:
             for user in self.friend_list:
                 f.write(f"{user}\n")
 
@@ -1161,15 +1197,29 @@ class IRCClient:
         """
         load Friend list!
         """
-        if os.path.exists("friend_list.txt"):
-            with open("friend_list.txt", "r", encoding='utf-8') as f:
+        
+        # Get the directory of the current script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+
+        # Construct the full path for the friend_list.txt
+        file_path = os.path.join(script_directory, 'friend_list.txt')
+
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding='utf-8') as f:
                 self.friend_list = [line.strip() for line in f.readlines()]
 
     def save_ignore_list(self):
         """
         saves ignore list
         """
-        with open("ignore_list.txt", "w", encoding='utf-8') as f:
+        
+        # Get the directory of the current script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+
+        # Construct the full path for the ignore_list.txt
+        file_path = os.path.join(script_directory, 'ignore_list.txt')
+
+        with open(file_path, "w", encoding='utf-8') as f:
             for item in self.ignore_list:
                 f.write(f"{item}\n")
 
@@ -1177,10 +1227,17 @@ class IRCClient:
         """
         loads ignore list
         """
-        if os.path.exists("ignore_list.txt"):
-            with open("ignore_list.txt", "r", encoding='utf-8') as f:
-                self.ignore_list = [line.strip() for line in f.readlines()]
+        
+        # Get the directory of the current script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
 
+        # Construct the full path for the ignore_list.txt
+        file_path = os.path.join(script_directory, 'ignore_list.txt')
+
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding='utf-8') as f:
+                self.ignore_list = [line.strip() for line in f.readlines()]
+            
     def reload_ignore_list(self):
         self.ignore_list = []
         self.load_ignore_list()
@@ -1192,8 +1249,8 @@ class IRCClient:
         """
         Save the channel list data to a file.
         """
-        current_directory = os.getcwd()
-        file_path = os.path.join(current_directory, 'channel_list.txt')
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(script_directory, 'channel_list.txt')
         
         with open(file_path, 'w', encoding='utf-8') as f:
             for channel in self.channel_list:
@@ -1240,8 +1297,8 @@ class IRCClient:
         self.send_message(f'WHOIS {target}')
 
     def display_channel_list_window(self):
-        current_directory = os.getcwd()
-        file_path = os.path.join(current_directory, 'channel_list.txt')
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(script_directory, 'channel_list.txt')
         
         # Check if the window is already open
         if self.channel_list_window and not self.channel_list_window.is_destroyed:
@@ -1479,7 +1536,8 @@ class IRCClientGUI:
 
     def handle_whois(self):
         if hasattr(self, 'selected_nick') and self.selected_nick:
-            self.irc_client.whois(self.selected_nick)
+            cleaned_nick = self.selected_nick.replace('+', '').replace('@', '')
+            self.irc_client.whois(cleaned_nick)
 
     def show_channel_menu(self, event):
         try:
@@ -1905,23 +1963,28 @@ class IRCClientGUI:
                 file_name_arg = args[1] if len(args) > 1 else None
                 self.fortune(file_name_arg)
             case "cowsay":
-                if len(args) > 1:
-                    file_name_arg = args[1]
-                    # Construct the potential file path
-                    potential_path = os.path.join(os.getcwd(), "Fortune Lists", f"{file_name_arg}.txt")
-
-                    # Check if the provided argument corresponds to a valid fortune file
-                    if os.path.exists(potential_path):
-                        self.fortune_cowsay(file_name_arg)
-                    else:
-                        # If not a valid file name, consider the rest of the arguments as a custom message
-                        custom_message = ' '.join(args[1:])
-                        self.cowsay_custom_message(custom_message)
-                else:
-                    self.fortune_cowsay()
+                self.handle_cowsay_command(args)
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
         self.input_entry.delete(0, tk.END)
+
+    def handle_cowsay_command(self, args):
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+
+        if len(args) > 1:
+            file_name_arg = args[1]
+            # Construct the potential file path using the absolute path
+            potential_path = os.path.join(script_directory, "Fortune Lists", f"{file_name_arg}.txt")
+
+            # Check if the provided argument corresponds to a valid fortune file
+            if os.path.exists(potential_path):
+                self.fortune_cowsay(file_name_arg)
+            else:
+                # If not a valid file name, consider the rest of the arguments as a custom message
+                custom_message = ' '.join(args[1:])
+                self.cowsay_custom_message(custom_message)
+        else:
+            self.fortune_cowsay()
 
     def navigate_history(self, event):
         """Navigate through the input history using the arrow keys."""
@@ -1978,11 +2041,11 @@ class IRCClientGUI:
         bottom_border = ' ' + '-' * (max_line_length - 2)
 
         cow = """
-            \\   ^__^
-             \\  (oo)\\_______
-                (__)\\       )\\/\\
-                    ||----w |
-                    ||     ||"""
+       \\   ^__^
+        \\  (oo)\\_______
+           (__)\\       )\\/\\
+               ||----w |
+               ||     ||"""
 
         return f"{top_border}\n{combined_message}\n{bottom_border}{cow}"
 
@@ -1991,18 +2054,14 @@ class IRCClientGUI:
         return textwrap.fill(text, width)
 
     def get_fortune_file(self, file_name=None):
-        """Returns the provided file_name if valid or a random file from the fortune directory."""
-        fortune_directory = os.path.join(os.getcwd(), "Fortune Lists")
-        fortune_files = [os.path.join(fortune_directory, f) for f in os.listdir(fortune_directory) if f.endswith('.txt')]
-
-        # Compute the potential path based on the provided file_name
-        potential_path = os.path.join(fortune_directory, f"{file_name}.txt") if file_name else None
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        fortune_directory = os.path.join(script_directory, "Fortune Lists")
         
-        # Check if the potential path is in the list of fortune_files
-        if potential_path and potential_path in fortune_files:
-            return potential_path
-        else:
-            return random.choice(fortune_files)
+        if file_name:
+            return os.path.join(fortune_directory, file_name + ".txt")
+        
+        fortune_files = [os.path.join(fortune_directory, f) for f in os.listdir(fortune_directory) if f.endswith('.txt')]
+        return random.choice(fortune_files)
 
     def fortune_cowsay(self, file_name=None):
         file_name = self.get_fortune_file(file_name)
@@ -2016,7 +2075,7 @@ class IRCClientGUI:
         for line in cowsay_fortune.split('\n'):
             self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
             self.update_message_text(line + "\r\n")
-            time.sleep(0.3)
+            time.sleep(0.4)
 
     def cowsay_custom_message(self, message):
         """Wrap a custom message using the cowsay format."""
@@ -2026,7 +2085,7 @@ class IRCClientGUI:
         for line in cowsay_output.split('\n'):
             self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
             self.update_message_text(line + "\r\n")
-            time.sleep(0.3)
+            time.sleep(0.4)
 
     def fortune(self, file_name=None):
         """Choose a random fortune from one of the lists"""
@@ -2039,7 +2098,7 @@ class IRCClientGUI:
         for line in chosen_fortune.split('\n'):
             self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
             self.update_message_text(line + "\r\n")
-            time.sleep(0.3)
+            time.sleep(0.4)
 
     def dice_roll(self, args):
         # Default to d20 if no arguments are provided
@@ -2530,7 +2589,7 @@ class IRCClientGUI:
             self.tab_complete_index = (self.tab_complete_index + 1) % len(self.tab_complete_completions)
 
         # Set up a timer to append ": " after half a second if no more tab presses
-        self.tab_completion_timer = self.root.after(250, self.append_colon_to_nick)
+        self.tab_completion_timer = self.root.after(500, self.append_colon_to_nick)
 
         # Prevent default behavior of the Tab key
         return 'break'
@@ -2923,7 +2982,14 @@ class ConfigWindow(tk.Toplevel):
         }
 
         # Write the updated configuration to the conf.rude file
-        with open("conf.rude", "w") as config_file:
+        # Get the directory of the current script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        
+        # Construct the full path for the conf.rude file
+        config_file_path = os.path.join(script_directory, 'conf.rude')
+
+        # Write the updated configuration to the conf.rude file using the full path
+        with open(config_file_path, "w") as config_file:
             config.write(config_file)
 
         self.destroy()
@@ -2933,8 +2999,9 @@ class ChannelListWindow(tk.Toplevel):
     def __init__(self, file_path, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.title("Channel List")
-        self.geometry("790x375")
+        self.geometry("790x400")
         self.is_destroyed = False
+        self.total_channels = 0
 
         self.create_widgets()
         self.start_download_thread(file_path)
@@ -2957,11 +3024,17 @@ class ChannelListWindow(tk.Toplevel):
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
+        # Progress bar
+        self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate")
+        self.progress_bar.grid(row=2, column=0, columnspan=2, pady=10, padx=10, sticky="ew")
+
     def start_download_thread(self, file_path):
+        self.total_channels = sum(1 for _ in open(file_path, 'r', encoding='utf-8'))
         download_thread = threading.Thread(target=self.read_and_insert_data, args=(file_path,), daemon=True)
         download_thread.start()
 
     def read_and_insert_data(self, file_path):
+        processed_channels = 0
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(f, start=1):
@@ -2981,6 +3054,9 @@ class ChannelListWindow(tk.Toplevel):
 
                     if not self.is_destroyed:
                         self.after(0, lambda cn=channel_name, uc=user_count, t=topic: self.tree.insert("", "end", values=(cn, uc, t)))
+                        processed_channels += 1
+                        progress = (processed_channels / self.total_channels) * 100
+                        self.after(0, lambda p=progress: self.progress_bar.configure(value=p))
         except Exception as e:
             print(f"Error reading the file {file_path} due to {e}")
 
