@@ -1237,7 +1237,7 @@ class IRCClient:
         if os.path.exists(file_path):
             with open(file_path, "r", encoding='utf-8') as f:
                 self.ignore_list = [line.strip() for line in f.readlines()]
-            
+
     def reload_ignore_list(self):
         self.ignore_list = []
         self.load_ignore_list()
@@ -1389,6 +1389,7 @@ class IRCClientGUI:
             icon_path = os.path.join(script_directory, "rude.png")
             self.icon_image = tk.PhotoImage(file=icon_path)
             self.root.iconphoto(True, self.icon_image)
+        self.root.protocol("WM_DELETE_WINDOW", self.handle_exit)
             
     def configure_styles(self):
         default_font = self.current_config.get("font_family", "Hack")
@@ -1919,6 +1920,10 @@ class IRCClientGUI:
                     self.update_message_text(f"{friend_name} added to friends.\r\n")
                 else:
                     self.update_message_text(f"{friend_name} is already in your friend list.\r\n")
+            case "friends":
+                for person in self.irc_client.friend_list:
+                    self.update_message_text(f"<Friends List>\r\n")
+                    self.update_message_text(f"{person}\r\n")
             case "unfriend": #removes friend
                 unfriend_name = user_input.split()[1]
                 if unfriend_name in self.irc_client.friend_list:
@@ -2353,6 +2358,7 @@ class IRCClientGUI:
         self.update_message_text(f'/whois <nickname> - Whois a specific user\r\n')
         self.update_message_text(f'/ignore <nickname> & /unignore <nickname> - Ignore/Unignore a user\r\n')
         self.update_message_text(f'/friend <nickname> - Add a user to your friend list\r\n')
+        self.update_message_text(f'/friends will show the friends list\r\n')
         self.update_message_text(f'/unfriend <nickname> - Remove a user from your friend list\r\n')
         self.update_message_text(f'/away to set yourself as away\r\n')
         self.update_message_text(f'/back to return (removes AWAY status)\r\n')
@@ -2589,7 +2595,7 @@ class IRCClientGUI:
             self.tab_complete_index = (self.tab_complete_index + 1) % len(self.tab_complete_completions)
 
         # Set up a timer to append ": " after half a second if no more tab presses
-        self.tab_completion_timer = self.root.after(500, self.append_colon_to_nick)
+        self.tab_completion_timer = self.root.after(300, self.append_colon_to_nick)
 
         # Prevent default behavior of the Tab key
         return 'break'
@@ -2757,10 +2763,6 @@ class IRCClientGUI:
             self.message_text.tag_raise("bold")
         if self.message_text.tag_ranges("italic"):
             self.message_text.tag_raise("italic")
-
-        # apply #C0FFEE text color
-        #self.message_text.tag_configure("brightgreen", foreground="#C0FFEE")
-        #self.message_text.tag_add("brightgreen", "1.0", "end")
 
     def display_channel_messages(self):
         """
