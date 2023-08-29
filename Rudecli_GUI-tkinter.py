@@ -421,6 +421,12 @@ class IRCClient:
                         case "366":
                             self.handle_366(tokens)
 
+                        case "367":  # RPL_BANLIST
+                            self.handle_banlist(tokens)
+                            
+                        case "368":  # RPL_ENDOFBANLIST
+                            self.handle_endofbanlist(tokens)
+
                         case "311" | "312" | "313" | "317" | "319" | "301" | "671" | "338" | "318":
                             self.handle_whois_replies(tokens.command, tokens)
                         case "391":
@@ -478,6 +484,31 @@ class IRCClient:
             if received_messages:
                 self.message_queue.put(received_messages)
                 self.irc_client_gui.update_message_text(received_messages)
+
+    def handle_banlist(self, tokens):
+        """
+        Handle the RPL_BANLIST reply, which provides info about each ban mask.
+        """
+        channel = tokens.params[1]
+        banmask = tokens.params[2]
+        setter = tokens.params[3]
+        timestamp = tokens.params[4]
+        
+        # Construct the ban information message
+        ban_info = f"Channel: {channel}, Banmask: {banmask}, Set by: {setter}, Timestamp: {timestamp}\r\n"
+        
+        # Update the GUI's message text with this ban information
+        self.irc_client_gui.update_ban_list(channel, ban_info=ban_info)
+
+    def handle_endofbanlist(self, tokens):
+        """
+        Handle the RPL_ENDOFBANLIST reply, signaling the end of the ban list.
+        """
+        channel = tokens.params[1]
+        
+        # Notify the user that the ban list has ended
+        end_message = f"End of ban list for channel: {channel}\r\n"
+        self.irc_client_gui.update_ban_list(channel, end_message=end_message)
 
     def handle_list_response(self, tokens):
         """
@@ -911,7 +942,7 @@ class IRCClient:
         if sender == self.nickname:
             return
 
-        if self.nickname in formatted_message:
+        if self.nickname.lower() in formatted_message.lower():
             self.trigger_beep_notification(channel_name=target, message_content=formatted_message)
             if target not in self.irc_client_gui.channels_with_mentions:
                 self.irc_client_gui.channels_with_mentions.append(target)
@@ -978,7 +1009,7 @@ class IRCClient:
 
         if ctcp_command == "VERSION":
             # Respond to VERSION request
-            version_reply = "\x01VERSION IRishC v2.6-3\x01"
+            version_reply = "\x01VERSION IRishC v2.7\x01"
             self.send_message(f'NOTICE {sender} :{version_reply}')
 
         elif ctcp_command == "CTCP":
@@ -1653,6 +1684,7 @@ class IRCClientGUI:
         """
         Show a system desktop notification.
         """
+        script_directory = os.path.dirname(os.path.abspath(__file__))
         # Check if the application window is the active window
         if self.is_app_focused():  # If the app is focused, return early
             return
@@ -1666,7 +1698,7 @@ class IRCClientGUI:
             else:
                 message = f"You've been pinged in {channel_name}!"
 
-        icon_path = os.path.abspath("rude.ico")
+        icon_path = os.path.join(script_directory, "rude.ico")
 
         try:
             # Desktop Notification
@@ -1940,6 +1972,10 @@ class IRCClientGUI:
                 ctcp_command = args[2].upper()
                 parameter = ' '.join(args[3:]) if len(args) > 3 else None
                 self.irc_client.send_ctcp_request(target, ctcp_command, parameter)
+            case "banlist":  # Requests ban list for a channel.
+                channel = args[1] if len(args) > 1 else self.irc_client.current_channel
+                if channel:
+                    self.irc_client.send_message(f'MODE {channel} +b')
             case "motd":
                 self.irc_client.send_message('MOTD')
             case "time":
@@ -2556,11 +2592,13 @@ class IRCClientGUI:
         user_input = self.input_entry.get()
         cursor_pos = self.input_entry.index(tk.INSERT)
 
-        # Update the regex to match alphanumeric, underscores, dashes, square brackets, curly braces, backslash, backticks, and pipes
-        match = re.search(r'\b[\]\w\-^[{}\\`|]+$', user_input[:cursor_pos])
-        if not match:
-            return
-        partial_nick = match.group()
+        # Find the partial nick before the cursor position
+        partial_nick = ''
+        for i in range(cursor_pos - 1, -1, -1):
+            char = user_input[i]
+            if not char.isalnum() and char not in "_-^[]{}\\`|":
+                break
+            partial_nick = char + partial_nick
 
         # Cancel any previous timers
         if hasattr(self, 'tab_completion_timer'):
@@ -2806,6 +2844,26 @@ class IRCClientGUI:
                 self.message_text.tag_add("system_message", start_idx, end_idx)
 
         self.root.after(0, _append_message_to_chat)
+
+    def update_ban_list(self, channel, ban_info=None, end_message=None):
+        """
+        Update the GUI with ban list information or an end message.
+        """
+        def _update_ban_list():
+            self.message_text.config(state=tk.NORMAL)
+                
+            if ban_info:
+                # Append the ban information to the message text
+                self.message_text.insert(tk.END, ban_info)
+                
+            if end_message:
+                # Append the end of ban list message
+                self.message_text.insert(tk.END, end_message)
+                
+            self.message_text.config(state=tk.DISABLED)
+            self.message_text.see(tk.END)
+
+        self.root.after(0, _update_ban_list)
 
     def find_urls(self, text):
         # A simple regex to detect URLs
