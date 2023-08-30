@@ -421,10 +421,10 @@ class IRCClient:
                         case "366":
                             self.handle_366(tokens)
 
-                        case "367":  # RPL_BANLIST
+                        case "367":  
                             self.handle_banlist(tokens)
                             
-                        case "368":  # RPL_ENDOFBANLIST
+                        case "368":  
                             self.handle_endofbanlist(tokens)
 
                         case "311" | "312" | "313" | "317" | "319" | "301" | "671" | "338" | "318":
@@ -1953,8 +1953,8 @@ class IRCClientGUI:
                 else:
                     self.update_message_text(f"{friend_name} is already in your friend list.\r\n")
             case "friends":
+                self.update_message_text(f"<Friends List>\r\n")
                 for person in self.irc_client.friend_list:
-                    self.update_message_text(f"<Friends List>\r\n")
                     self.update_message_text(f"{person}\r\n")
             case "unfriend": #removes friend
                 unfriend_name = user_input.split()[1]
@@ -1972,7 +1972,7 @@ class IRCClientGUI:
                 ctcp_command = args[2].upper()
                 parameter = ' '.join(args[3:]) if len(args) > 3 else None
                 self.irc_client.send_ctcp_request(target, ctcp_command, parameter)
-            case "banlist":  # Requests ban list for a channel.
+            case "banlist":
                 channel = args[1] if len(args) > 1 else self.irc_client.current_channel
                 if channel:
                     self.irc_client.send_message(f'MODE {channel} +b')
@@ -2388,6 +2388,7 @@ class IRCClientGUI:
         self.update_message_text(f'/notice - Sends a notice message\r\n')
         self.update_message_text(f'/invite - Invites a user to a channel\r\n')
         self.update_message_text(f'/kick - Kicks a user from a channel\r\n')
+        self.update_message_text(f'/banlist - shows the banlist for the channel.')
 
         # === User & Interaction Commands ===
         self.update_message_text("\r\n=== User & Interaction Commands ===\r\n")
