@@ -22,4 +22,4 @@ Config Example:
                 ssl_enabled = True needs port 6697(usually)
                 sasl_enabled will use SASL to authenticate if SASL is available. Default is False - must be enabled.
 
-![alt text](https://i.imgur.com/vfWY2mt.png)
+![alt text](https://i.imgur.com/3ZrVDk4.png)
