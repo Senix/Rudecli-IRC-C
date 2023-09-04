@@ -34,6 +34,7 @@ import os
 import platform
 import random
 import re
+import shlex
 import socket
 import ssl
 import subprocess
@@ -1395,6 +1396,7 @@ class IRCClientGUI:
         self.channels_with_activity = []
         self.input_history = []
         self.nickname_colors = {}
+        self.channel_input_dict = {}
         self.current_channel = None
         self.ASCII_ART_DIRECTORY = os.path.join(script_directory, 'Art')
         self.ASCII_ART_MACROS = self.load_ascii_art_macros()
@@ -1641,6 +1643,10 @@ class IRCClientGUI:
 
     def query_user(self):
         target_user = self.selected_nick
+        # Remove "@" and "+" from the beginning of the nick
+        if target_user.startswith("@") or target_user.startswith("+"):
+            target_user = target_user[1:]
+
         if target_user not in self.irc_client.dm_users:
             self.irc_client.dm_users.append(target_user)
             self.update_message_text(f"DM opened with {target_user}.\r\n")
@@ -1716,8 +1722,8 @@ class IRCClientGUI:
         ascii_macros = {}
         for file in os.listdir(self.ASCII_ART_DIRECTORY):
             if file.endswith(".txt"):
-                with open(os.path.join(self.ASCII_ART_DIRECTORY, file), 'r') as f:
-                    macro_name, _ = os.path.splitext(file) 
+                with open(os.path.join(self.ASCII_ART_DIRECTORY, file), 'r', encoding='utf-8') as f:
+                    macro_name, _ = os.path.splitext(file)
                     ascii_macros[macro_name] = f.read()
         return ascii_macros
 
@@ -1744,6 +1750,10 @@ class IRCClientGUI:
         return dict(config["IRC"])  #convert config to a dictionary
 
     def switch_channel(self, event):
+        # Save the current input to the old channel or DM
+        old_channel = self.irc_client.current_channel
+        self.channel_input_dict[old_channel] = self.input_entry.get()
+
         # get the selected channel or DM from the clicked position
         index = self.joined_channels_text.index("@%d,%d" % (event.x, event.y))
         line_num = int(index.split(".")[0])
@@ -1772,12 +1782,19 @@ class IRCClientGUI:
         self.joined_channels_text.tag_add("selected", f"{line_num}.0", f"{line_num}.end")
         self.selected_channel = selection
 
+        # Load the saved input for the new channel or DM
+        new_channel = self.irc_client.current_channel
+        saved_input = self.channel_input_dict.get(new_channel, "")
+        self.input_entry.delete(0, tk.END)
+        self.input_entry.insert(0, saved_input)
+
         # Reset the color of the clicked channel by removing the "mentioned" and "activity" tags
         self.joined_channels_text.tag_remove("mentioned", f"{line_num}.0", f"{line_num}.end")
         self.channels_with_mentions = []
         self.joined_channels_text.tag_remove("activity", f"{line_num}.0", f"{line_num}.end")
         if selection in self.channels_with_activity:
             self.channels_with_activity.remove(selection)
+            
         return "break"
 
     def clear_chat_window(self):
@@ -1805,6 +1822,9 @@ class IRCClientGUI:
         # Check for empty input
         if not user_input:
             return  # Exit the method without doing anything if input is empty
+
+        current_channel = self.irc_client.current_channel
+        self.channel_input_dict[current_channel] = self.input_entry.get()
         
         # Add the input to history and adjust the position
         if len(self.input_history) >= self.MAX_HISTORY:
@@ -1896,7 +1916,7 @@ class IRCClientGUI:
                 self.irc_client.send_message(f'TOPIC {self.irc_client.current_channel}')
             case "help": #HELP!
                 self.display_help()
-            case "users": #refreshes user list
+            case "names": #refreshes user list
                 self.irc_client.sync_user_list()
             case "nick": #changes nickname
                 new_nickname = user_input.split()[1]
@@ -2337,7 +2357,6 @@ class IRCClientGUI:
         return cowsay_result.stdout
 
     def handle_sysfortune_command(self, args=[]):
-        import shlex
         try:
             # Build the fortune command with the given arguments.
             # We use shlex.quote to safely escape any argument passed to the command.
@@ -2375,6 +2394,7 @@ class IRCClientGUI:
         self.update_message_text(f'/motd - View Message of the Day\r\n')
         self.update_message_text(f'/time - Check server time\r\n')
         self.update_message_text(f'/list - List available channels\r\n')
+        self.update_message_text(f'/names - reloads the user list\r\n')
 
         # === Channel & Message Management ===
         self.update_message_text("\r\n=== Channel & Message Management ===\r\n")
@@ -2414,13 +2434,16 @@ class IRCClientGUI:
         self.update_message_text(f'Note: cowsay & fortune are internal within the client and will pull from the Fortune Lists folder\r\n')
 
     def format_message_for_display(self, message):
+        #print("Original Message:", message)
+        
         # Remove color codes
         message_no_colors = re.sub(r'\x03(\d{1,2}(,\d{1,2})?)?', '', message)
-
+        #print("Message without colors:", message_no_colors)
+        
         # Define patterns for bold, italic, and reset
-        bold_pattern = r'\x02(.*?)(?:\x02|\x0F|$)'  # Modified to make the closing code optional and also check for end of string
-        italic_pattern = r'\x1D(.*?)(?:\x1D|\x0F|$)'  # Modified similarly
-
+        bold_pattern = r'\x02(.*?)(?:\x02|\x0F|$)'
+        italic_pattern = r'\x1D(.*?)(?:\x1D|\x0F|$)'
+        
         # Function to extract ranges from matches
         def get_ranges(pattern, msg):
             ranges = []
@@ -2435,15 +2458,20 @@ class IRCClientGUI:
             return ranges
 
         bold_ranges = get_ranges(bold_pattern, message_no_colors)
+        #print("Bold Ranges:", bold_ranges)
+        
         italic_ranges = get_ranges(italic_pattern, message_no_colors)
+        #print("Italic Ranges:", italic_ranges)
 
         # For bold-italic, we'll look for overlapping ranges
         bold_italic_ranges = set([(b_start, b_end) for b_start, b_end in bold_ranges 
                                   for i_start, i_end in italic_ranges 
                                   if b_start <= i_start and b_end >= i_end])
-
+        #print("Bold-Italic Ranges:", bold_italic_ranges)
+        
         # Remove the formatting characters to get the formatted message
         formatted_message = re.sub(r'[\x02\x1D\x0F]', '', message_no_colors)
+        #print("Formatted Message:", formatted_message)
 
         return formatted_message, bold_ranges, italic_ranges, list(bold_italic_ranges)
 
