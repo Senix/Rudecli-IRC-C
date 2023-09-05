@@ -121,7 +121,6 @@ class ConfigWindow(tk.Toplevel):
         sasl_username = self.entry_sasl_username.get()
         sasl_password = self.entry_sasl_password.get()
 
-
         # Create a new configparser object
         config = configparser.ConfigParser()
 
@@ -140,15 +139,19 @@ class ConfigWindow(tk.Toplevel):
             "sasl_password": sasl_password
         }
 
-        # Write the updated configuration to the conf.rude file
-        # Get the directory of the current script
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-        
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+
         # Construct the full path for the conf.rude file
         config_file_path = os.path.join(script_directory, 'conf.rude')
 
         # Write the updated configuration to the conf.rude file using the full path
-        with open(config_file_path, "w") as config_file:
+        with open(config_file_path, "w", encoding='utf-8') as config_file:
             config.write(config_file)
 
         self.destroy()
