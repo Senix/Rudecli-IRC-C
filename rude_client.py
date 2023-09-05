@@ -1359,6 +1359,7 @@ class IRCClient:
         """
         Display the channel list window.
         """
+        from list_window import ChannelListWindow
         
         # Determine if running as a script or as a frozen executable
         if getattr(sys, 'frozen', False):
