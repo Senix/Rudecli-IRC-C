@@ -39,7 +39,13 @@ from shared_imports import *
 def main():
     """The Main Function for the RudeChat IRC Client."""
     
-    script_directory = os.path.dirname(os.path.abspath(__file__))
+    # Determine if running as a script or as a frozen executable
+    if getattr(sys, 'frozen', False):
+        # Running as compiled
+        script_directory = os.path.dirname(sys.executable)
+    else:
+        # Running as script
+        script_directory = os.path.dirname(os.path.abspath(__file__))
     
     config_file_path = os.path.join(script_directory, 'conf.rude')
 
