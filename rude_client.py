@@ -81,7 +81,7 @@ class IRCClient:
         else:
             # Running as script
             script_directory = os.path.dirname(os.path.abspath(__file__))
-        
+            
         # Set absolute path for the Splash directory
         splash_dir = os.path.join(script_directory, 'Splash')
         splash_files = [f for f in os.listdir(splash_dir) if os.path.isfile(os.path.join(splash_dir, f))]
@@ -90,19 +90,21 @@ class IRCClient:
         # Read the selected ASCII art file
         with open(os.path.join(splash_dir, selected_splash_file), 'r', encoding='utf-8') as f:
             clover_art = f.read()
-
+        #
         print(f'Connecting to server: {self.server}:{self.port}')
+        
+        # Use socket.create_connection to automatically determine address family
+        self.irc = socket.create_connection((self.server, self.port))
 
+        # Wrap the socket with SSL if needed
         if self.ssl_enabled:
             context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            self.irc = context.wrap_socket(socket.socket(socket.AF_INET6 if ':' in self.server else socket.AF_INET),
-                                           server_hostname=self.server)
-        else:
-            self.irc = socket.socket(socket.AF_INET6 if ':' in self.server else socket.AF_INET)
+            context.check_hostname = True
+            context.verify_mode = ssl.CERT_REQUIRED
+            self.irc = context.wrap_socket(self.irc, server_hostname=self.server)
 
-        self.irc.connect((self.server, self.port))
+        # No need to call self.irc.connect, as socket.create_connection has already established the connection
+
         self.irc_client_gui.update_message_text(f'Connecting to server: {self.server}:{self.port}\n')
 
         if self.sasl_enabled:
@@ -110,6 +112,7 @@ class IRCClient:
 
         self.irc.send(bytes(f'NICK {self.nickname}\r\n', 'UTF-8'))
         self.irc.send(bytes(f'USER {self.nickname} 0 * :{self.nickname}\r\n', 'UTF-8'))
+
         print(f'Connected to server: {self.server}:{self.port}')
         self.irc_client_gui.update_message_text(f'Connected to server: {self.server}:{self.port}\n')
         self.irc_client_gui.update_message_text(clover_art)
