@@ -871,12 +871,22 @@ class IRCClientGUI:
 
     def handle_mode_command(self, args):
         if len(args) < 3:
-            self.update_message_text("Usage: /mode <target> <mode>\r\n")
+            self.update_message_text("Usage: /mode [channel] <target> <mode>\r\n")
             return
-        target = args[1]
-        mode = args[2]
-        self.irc_client.send_message(f'MODE {target} {mode}\r\n')
-        self.update_message_text(f"Set mode {mode} for {target}\r\n")
+
+        # Check if a channel is explicitly specified
+        if args[1].startswith("#"):
+            channel = args[1]
+            target = args[2]
+            mode = args[3]
+        else:  # If no channel is specified, use the current channel
+            channel = self.irc_client.current_channel
+            target = args[1]
+            mode = args[2]
+
+        # Send the MODE command to the IRC server
+        self.irc_client.send_message(f'MODE {channel} {mode} {target}')
+        self.update_message_text(f"Attempting to set mode {mode} for {target} in {channel}\r\n")
 
     def handle_notice_command(self, args):
         if len(args) < 3:
