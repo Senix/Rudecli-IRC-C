@@ -4,6 +4,7 @@ class IRCClient:
     MAX_MESSAGE_HISTORY_SIZE = 200
 
     def __init__(self):
+        logging.basicConfig(level=logging.DEBUG, filename='irc_client.log', filemode='w')
         # Initialization method and related properties
         self.irc_client_gui = None
         self.decoder = irctokens.StatefulDecoder()
@@ -18,11 +19,13 @@ class IRCClient:
         self.current_channel: str = ''
         self.user_list = {}
         self.temp_user_list = {}
+        self.user_flags = {}
         self.whois_data = {}
         self.dm_users = []
         self.dm_messages = {}
         self.user_dual_privileges = {}
-        self.backup_nicknames = ["Rudie", "stixie"]
+        self.special_char_to_mode = {}
+        self.backup_nicknames = ["Rude", "stixie"]
         self.ignore_list = []
         self.friend_list = []
         self.server_capabilities = {}
@@ -224,7 +227,7 @@ class IRCClient:
         self.joined_channels.append(channel)
         self.channel_messages[channel] = []
         self.user_list[channel] = []
-        self.irc_client_gui.update_message_text(f'Joined channel: {channel}\r\n')
+        self.irc_client_gui.update_joined_channels_list(channel)
         time.sleep(1)
 
     def leave_channel(self, channel):
@@ -525,28 +528,22 @@ class IRCClient:
             self.has_auto_joined = True
 
     def handle_notice(self, tokens, timestamp, sender):
-        logging.debug(f"Received NOTICE from {sender} at {timestamp} with content: {tokens.params[1]}")
-
         target = tokens.params[0]
         notice_content = tokens.params[1]
 
         # Check if the target is a channel or the user
         if target.startswith(("#", "&", "+", "!")):
-            logging.debug(f"NOTICE is channel-specific for channel {target}.")
             
             # This is a channel-specific NOTICE
             if target not in self.channel_messages:
                 self.channel_messages[target] = []
             self.channel_messages[target].append((timestamp, sender, notice_content))
             if target == self.current_channel:
-                logging.debug("Displaying NOTICE in current channel.")
                 return f'{timestamp} [NOTICE] <{sender}> {notice_content}'
             else:
                 self.notify_channel_activity(target)
                 return None
-        else:
-            logging.debug("NOTICE is user-specific. Displaying in server/status tab.")
-            
+        else:            
             # This is a user-specific NOTICE, display in a general "server" or "status" tab
             server_tab_content = f'[SERVER NOTICE] <{sender}> {notice_content}'
             self.irc_client_gui.update_server_feedback_text(server_tab_content)
@@ -560,13 +557,19 @@ class IRCClient:
         isupport_params = tokens.params[:-1]
 
         # Store these in a dictionary 
-        new_capabilities = {}  # Track the new capabilities from this specific message
+        new_capabilities = {} 
         for param in isupport_params:
             if '=' in param:
                 key, value = param.split('=', 1)
-                if key not in self.server_capabilities:  # Only display if it's a new capability
+                if key not in self.server_capabilities:  
                     new_capabilities[key] = value
                     self.server_capabilities[key] = value
+
+                    # If the capability is PREFIX, update the special_char_to_mode
+                    if key == 'PREFIX':
+                        modes, symbols = value[1:].split(')', 1)
+                        self.special_char_to_mode = dict(zip(symbols, modes))
+
             else:
                 # Some capabilities might just be flags without a value
                 if param not in self.server_capabilities:
@@ -589,18 +592,23 @@ class IRCClient:
             print("Error: Unexpected format for the 353 command.")
             return
 
+        # Initialize channel if not already present in temp_user_list
         if channel not in self.temp_user_list:
             self.temp_user_list[channel] = []
+
         self.temp_user_list[channel].extend(users)  # Accumulate users in the temp list
 
     def handle_366(self, tokens):
         channel = tokens.params[1]
-        
+
         with self.user_list_lock:
             if channel in self.temp_user_list:
                 self.user_list[channel] = self.temp_user_list[channel]
+
+                # Initialize user_flags for the channel based on the complete user list
+                self.initialize_user_flags_from_list(channel, self.temp_user_list[channel])
+
                 del self.temp_user_list[channel]
-                self.irc_client_gui.update_joined_channels_list(channel)
 
     def handle_who_reply(self, tokens):
         """
@@ -1038,44 +1046,72 @@ class IRCClient:
         self.sound_ctcp_count = 0
         self.sound_ctcp_limit_flag = False
 
-    def handle_mode_changes(self, channel, mode, user):
-        if mode == "+o":
-            #if user already has voice (+v), upgrade to operator
-            if "+" + user in self.user_list[channel]:
-                self.user_list[channel].remove("+" + user)
-                self.user_list[channel].append("@" + user)
-                self.user_dual_privileges[user] = True
-            #else if user is already in list without voice, just add operator status
-            elif user in self.user_list[channel]:
-                self.user_list[channel].remove(user)
-                self.user_list[channel].append("@" + user)
-        elif mode == "-o":
-            #if the user is an operator
-            if "@" + user in self.user_list[channel]:
-                self.user_list[channel].remove("@" + user)
-                # If they were given voice while being an operator, they should retain voice after de-op
-                if self.user_dual_privileges.get(user):
-                    self.user_list[channel].append("+" + user)
-                # If they were not given voice while being an operator, revert to normal user status
+    def initialize_user_flags_from_list(self, channel, user_list):
+        # Initialize the user_flags for the channel
+        self.user_flags[channel] = {}
+
+        # Populate the user_flags based on the user_list
+        for user in user_list:
+            stripped_user = user.lstrip(''.join(self.special_char_to_mode.keys()))  # Use dynamic symbols
+            flags = set()
+            for char in user:
+                if char in self.special_char_to_mode:  # Use dynamic mapping
+                    flags.add(self.special_char_to_mode[char])  # Use dynamic mapping
+            self.user_flags[channel][stripped_user] = flags
+
+    def handle_mode_changes(self, channel, mode_string, user):
+        if channel not in self.user_flags:
+            self.user_flags[channel] = {}
+
+        add_mode = False
+        skip_next_mode = False
+
+        for mode in mode_string:
+            if skip_next_mode:
+                skip_next_mode = False
+                continue
+
+            if mode == '+':
+                add_mode = True
+            elif mode == '-':
+                add_mode = False
+            else:
+                # Skip +q, -q, +b, -b modes
+                if mode in 'qb':
+                    skip_next_mode = True
+                    continue
+
+                if user not in self.user_flags[channel]:
+                    self.user_flags[channel][user] = set()
+
+                if add_mode:
+                    self.user_flags[channel][user].add(mode)
                 else:
-                    self.user_list[channel].append(user)
-                # If the user was tracked for dual privileges, remove them from that tracking
-                if user in self.user_dual_privileges:
-                    del self.user_dual_privileges[user]
-        elif mode == "+v":
-            # Give voice mode only if they are not an operator; if they are, mark them for dual privileges
-            if user in self.user_list[channel] and "@" + user not in self.user_list[channel]:
-                self.user_list[channel].remove(user)
-                self.user_list[channel].append("+" + user)
-            elif "@" + user in self.user_list[channel]:
-                self.user_dual_privileges[user] = True
-        elif mode == "-v":
-            # Take voice mode
-            if "+" + user in self.user_list[channel]:
-                self.user_list[channel].remove("+" + user)
-                self.user_list[channel].append(user)
-        if channel == self.irc_client_gui.current_channel:
-            self.irc_client_gui.update_user_list(channel)
+                    self.user_flags[channel][user].discard(mode)
+
+        if user in self.user_flags[channel]:  # Check if the user exists in the dictionary
+            updated_user_nick = self.format_nick(user, self.user_flags[channel][user])
+
+            self.user_list[channel] = [existing_user for existing_user in self.user_list[channel]
+                                       if existing_user.lstrip('@+%') != user]
+            self.user_list[channel].append(updated_user_nick)
+
+            if channel == self.irc_client_gui.current_channel:
+                self.irc_client_gui.update_user_list(channel)
+
+    def format_nick(self, user, flags):
+        """Format the nick based on the flags."""
+        # Check for flags in order of precedence
+        if 'q' in flags:  # Adding support for channel owner
+            return '~' + user
+        elif 'o' in flags:
+            return '@' + user
+        elif 'h' in flags:
+            return '%' + user
+        elif 'v' in flags:
+            return '+' + user
+        else:
+            return user
 
     def trigger_beep_notification(self, channel_name=None, message_content=None):
         """
