@@ -26,9 +26,13 @@ ssl_enabled = True needs port 6697(usually)
 
 # Import GUI
 from main_gui import IRCClientGUI
+# Import Client
 from rude_client import IRCClient
+# Import Config Window
 from config_window import ConfigWindow
+# Import Channel List Window.
 from list_window import ChannelListWindow
+# Everything else.
 from shared_imports import *
 
 
