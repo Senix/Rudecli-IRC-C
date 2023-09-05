@@ -27,7 +27,17 @@ class IRCClientGUI:
         self.start_threads()
 
     def init_attributes(self, irc_client):
-        script_directory = os.path.dirname(os.path.abspath(__file__))
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+            # Directly append 'Art' to the script_directory
+            self.ASCII_ART_DIRECTORY = os.path.join(script_directory, 'Art')
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+            self.ASCII_ART_DIRECTORY = os.path.join(script_directory, 'Art')
+
         self.irc_client = irc_client
         self.exit_event = irc_client.exit_event
         self.channels_with_mentions = []
@@ -36,22 +46,27 @@ class IRCClientGUI:
         self.nickname_colors = {}
         self.channel_input_dict = {}
         self.current_channel = None
-        self.ASCII_ART_DIRECTORY = os.path.join(script_directory, 'Art')
         self.ASCII_ART_MACROS = self.load_ascii_art_macros()
         self.current_config = self.load_config()
         self.selected_channel = None
         self.history_position = -1  
-        self.MAX_HISTORY = 8  
+        self.MAX_HISTORY = 8 
 
     def setup_main_window(self):
         """Set up the main window of the GUI."""
-        # Get the directory of the current script
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-
+        
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
         self.root = tk.Tk()
         self.root.title("RudeChat")
         self.root.geometry("1200x800")
-
+        
         # Platform-specific icon setting
         if platform.system() == "Windows":
             icon_path = os.path.join(script_directory, "rude.ico")
@@ -60,6 +75,7 @@ class IRCClientGUI:
             icon_path = os.path.join(script_directory, "rude.png")
             self.icon_image = tk.PhotoImage(file=icon_path)
             self.root.iconphoto(True, self.icon_image)
+
         self.root.protocol("WM_DELETE_WINDOW", self.handle_exit)
             
     def configure_styles(self):
@@ -376,16 +392,21 @@ class IRCClientGUI:
 
     def load_config(self):
         """Load the configuration file."""
-        # Get the directory of the current script
-        script_directory = os.path.dirname(os.path.abspath(__file__))
         
-        # Join the directory with the configuration file name to get the absolute path
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
         config_file_path = os.path.join(script_directory, 'conf.rude')
-        
+
         config = configparser.ConfigParser()
-        config.read(config_file_path) 
+        config.read(config_file_path)
         
-        return dict(config["IRC"])  #convert config to a dictionary
+        return dict(config["IRC"]) # Convert to dictionary
 
     def switch_channel(self, event):
         # Save the current input to the old channel or DM
