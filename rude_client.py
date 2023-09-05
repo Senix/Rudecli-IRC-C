@@ -73,10 +73,15 @@ class IRCClient:
         """
         Connect to the IRC server
         """
-
-        # Get the directory of the current script
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-
+        
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
         # Set absolute path for the Splash directory
         splash_dir = os.path.join(script_directory, 'Splash')
         splash_files = [f for f in os.listdir(splash_dir) if os.path.isfile(os.path.join(splash_dir, f))]
@@ -1117,7 +1122,14 @@ class IRCClient:
         """
         You've been pinged! Plays a beep or noise on mention.
         """
-        script_directory = os.path.dirname(os.path.abspath(__file__))
+        
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
         
         if sys.platform.startswith("linux"):
             # Linux-specific notification sound using paplay
@@ -1147,7 +1159,7 @@ class IRCClient:
 
     def log_message(self, channel, sender, message, is_sent=False):
         """
-        Logs your chats for later use
+        Logs your chats for later use.
         """
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
@@ -1176,9 +1188,14 @@ class IRCClient:
             else:
                 log_line += f'           <{sender if is_sent else self.nickname}> {line}\n'
         
-        # Get the directory of the current script
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
         # Construct the full path for the Logs directory
         logs_directory = os.path.join(script_directory, 'Logs')
         
@@ -1193,12 +1210,17 @@ class IRCClient:
 
     def save_friend_list(self):
         """
-        save Friend list!
+        Save Friend list!
         """
         
-        # Get the directory of the current script
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
         # Construct the full path for the friend_list.txt
         file_path = os.path.join(script_directory, 'friend_list.txt')
 
@@ -1208,12 +1230,17 @@ class IRCClient:
 
     def load_friend_list(self):
         """
-        load Friend list!
+        Load Friend list!
         """
         
-        # Get the directory of the current script
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
         # Construct the full path for the friend_list.txt
         file_path = os.path.join(script_directory, 'friend_list.txt')
 
@@ -1223,12 +1250,17 @@ class IRCClient:
 
     def save_ignore_list(self):
         """
-        saves ignore list
+        Saves ignore list!
         """
         
-        # Get the directory of the current script
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
         # Construct the full path for the ignore_list.txt
         file_path = os.path.join(script_directory, 'ignore_list.txt')
 
@@ -1238,12 +1270,17 @@ class IRCClient:
 
     def load_ignore_list(self):
         """
-        loads ignore list
+        Loads ignore list!
         """
         
-        # Get the directory of the current script
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
         # Construct the full path for the ignore_list.txt
         file_path = os.path.join(script_directory, 'ignore_list.txt')
 
@@ -1262,9 +1299,18 @@ class IRCClient:
         """
         Save the channel list data to a file.
         """
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(script_directory, 'channel_list.txt')
         
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
+        # Construct the full path for the channel_list.txt
+        file_path = os.path.join(script_directory, 'channel_list.txt')
+
         with open(file_path, 'w', encoding='utf-8') as f:
             for channel in self.channel_list:
                 f.write(f"Channel: {channel['name']}, Users: {channel['users']}, Topic: {channel['topic']}\n")
@@ -1310,9 +1356,21 @@ class IRCClient:
         self.send_message(f'WHOIS {target}')
 
     def display_channel_list_window(self):
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(script_directory, 'channel_list.txt')
+        """
+        Display the channel list window.
+        """
         
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
+        # Construct the full path for the channel_list.txt
+        file_path = os.path.join(script_directory, 'channel_list.txt')
+
         # Check if the window is already open
         if self.channel_list_window and not self.channel_list_window.is_destroyed:
             # Bring the existing window to the front
