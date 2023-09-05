@@ -327,6 +327,7 @@ class IRCClientGUI:
             pass
 
     def open_config_window(self):
+        from config_window import ConfigWindow
         config_window = ConfigWindow(self.current_config)
         config_window.mainloop()
 
