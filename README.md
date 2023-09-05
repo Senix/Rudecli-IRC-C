@@ -16,7 +16,7 @@ Config Example:
         sasl_username = Rudie
         sasl_password = password
 
-                password can be replaced with your nicks password to auto-auth with nickserv.
+                password can be replaced with your nick's password to auto-auth with nickserv.
                 to use ssl or not you can designate by port: no ssl: 6667 yes ssl: 6697
                 ssl_enabled = False needs port 6667
                 ssl_enabled = True needs port 6697(usually)
