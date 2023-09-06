@@ -103,8 +103,6 @@ class IRCClient:
             context.verify_mode = ssl.CERT_REQUIRED
             self.irc = context.wrap_socket(self.irc, server_hostname=self.server)
 
-        # No need to call self.irc.connect, as socket.create_connection has already established the connection
-
         self.irc_client_gui.update_message_text(f'Connecting to server: {self.server}:{self.port}\n')
 
         if self.sasl_enabled:
@@ -123,7 +121,10 @@ class IRCClient:
         """
         # Close the socket connection
         if hasattr(self, 'irc'):
-            self.irc.close()
+            try:
+                self.irc.close()
+            except Exception as e:
+                print(f"Error while closing the socket: {e}")
 
         # Stop the threads if they're running
         for thread in [self.receive_thread, self.stay_alive_thread, self.reconnection_thread]:
@@ -131,6 +132,15 @@ class IRCClient:
                 thread.join(timeout=1)
 
         # Reset states or data structures
+        self.channel_list = []
+        self.temp_user_list = {}
+        self.user_flags = {}
+        self.whois_data = {}
+        self.dm_users = []
+        self.dm_messages = {}
+        self.user_dual_privileges = {}
+        self.special_char_to_mode = {}
+        self.server_capabilities = {}
         self.joined_channels = []
         self.current_channel = ''
         self.channel_messages = {}
