@@ -38,6 +38,7 @@ class IRCClient:
         self.stay_alive_thread = None
         self.reconnection_thread = None
         self.channel_list_window = None
+        self.reset_timer = None
 
         # Protocol specific properties
         self.current_nick_index = 0
@@ -119,17 +120,21 @@ class IRCClient:
         """
         Disconnect from the IRC server and stop any related threads.
         """
+        channel = None
+        self.exit_event.set()
+
+        # Stop the threads if they're running
+        for thread in [self.receive_thread, self.stay_alive_thread, self.reconnection_thread, self.reset_timer]:
+            if thread and thread.is_alive():
+                thread.join(timeout=1)
+
         # Close the socket connection
         if hasattr(self, 'irc'):
             try:
                 self.irc.close()
             except Exception as e:
-                print(f"Error while closing the socket: {e}")
-
-        # Stop the threads if they're running
-        for thread in [self.receive_thread, self.stay_alive_thread, self.reconnection_thread]:
-            if thread and thread.is_alive():
-                thread.join(timeout=1)
+                print("Error while closing the socket:")
+                traceback.print_exc()
 
         # Reset states or data structures
         self.channel_list = []
@@ -149,6 +154,8 @@ class IRCClient:
         self.has_auto_joined = False
         print(f"Disconnected")
         self.irc_client_gui.update_message_text(f"Disconnected\r\n")
+        self.irc_client_gui.update_user_list(channel)
+        self.irc_client_gui.update_joined_channels_list(channel)
 
     def reconnect(self, server=None, port=None):
         """
@@ -156,9 +163,9 @@ class IRCClient:
         """
         if server:
             self.set_server(server, port)
+        self.irc_client_gui.clear_chat_window()
+        self.exit_event.clear()
 
-        self.disconnect()
-        time.sleep(1)
         # Start a new connection
         self.reconnection_thread = threading.Thread(target=self.start)
         self.reconnection_thread.daemon = True
