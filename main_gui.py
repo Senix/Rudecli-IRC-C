@@ -496,7 +496,7 @@ class IRCClientGUI:
         if user_input[0] == "/":
             self._command_parser(user_input, user_input[1:].split()[0])
         else:
-            self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{user_input}')
+            self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{user_input}')
             self.update_message_text(f'{timestamp} <{self.irc_client.nickname}> {user_input}\r\n')
         self.input_entry.delete(0, tk.END)
 
@@ -510,7 +510,7 @@ class IRCClientGUI:
             case "quit": #exits client.
                 self.handle_exit()
             case "disconnect": #disconnects from network.
-                self.irc_client.send_message('QUIT')
+                self.irc_client._send_message('QUIT')
                 time.sleep(1)
                 self.irc_client.disconnect()
             case "reconnect": #reconnects to network
@@ -540,17 +540,17 @@ class IRCClientGUI:
             case "away": # set the user as away
                 if len(args) > 1:  # Check if an away message has been provided
                     away_message = ' '.join(args[1:])
-                    self.irc_client.send_message(f'AWAY :{away_message}')
+                    self.irc_client._send_message(f'AWAY :{away_message}')
                 else:  # If no away message, it typically removes the away status.
-                    self.irc_client.send_message('AWAY')
+                    self.irc_client._send_message('AWAY')
             case "back": # remove the "away" status
-                self.irc_client.send_message('AWAY')
+                self.irc_client._send_message('AWAY')
             case "msg": #send a message to a user
                 parts = user_input.split(' ', 2)
                 if len(parts) >= 3:
                     receiver = parts[1]
                     message_content = parts[2]
-                    self.irc_client.send_message(f'PRIVMSG {receiver} :{message_content}')
+                    self.irc_client._send_message(f'PRIVMSG {receiver} :{message_content}')
                     self.update_message_text(f'<{self.irc_client.nickname} -> {receiver}> {message_content}\r\n')
                 else:
                     self.update_message_text(f"Invalid usage. Usage: /msg <nickname> <message_content>\r\n")
@@ -573,7 +573,7 @@ class IRCClientGUI:
                 self.display_channel_messages()
                 self.update_window_title(self.irc_client.nickname, channel_name)
             case "topic": #requests topic only for right now
-                self.irc_client.send_message(f'TOPIC {self.irc_client.current_channel}')
+                self.irc_client._send_message(f'TOPIC {self.irc_client.current_channel}')
             case "help": #HELP!
                 self.display_help()
             case "names": #refreshes user list
@@ -587,7 +587,7 @@ class IRCClientGUI:
                     action_content = parts[1]
                     current_time = datetime.datetime.now().strftime('%H:%M:%S')
                     action_message = f'\x01ACTION {action_content}\x01'
-                    self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{action_message}')
+                    self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{action_message}')
                     self.update_message_text(f'[{current_time}] * {self.irc_client.nickname} {action_content}\r\n')
                 else:
                     self.update_message_text("Invalid usage. Usage: /me <action_content>\r\n")
@@ -622,7 +622,7 @@ class IRCClientGUI:
             case "sa": #sends to all channels
                 message = ' '.join(user_input.split()[1:])
                 for channel in self.irc_client.joined_channels:
-                    self.irc_client.send_message(f'PRIVMSG {channel} :{message}')
+                    self.irc_client._send_message(f'PRIVMSG {channel} :{message}')
                 self.update_message_text(f'Message sent to all joined channels: {message}\r\n')
             case "friend": #adds friend
                 friend_name = user_input.split()[1]
@@ -651,17 +651,17 @@ class IRCClientGUI:
                 target = args[1]
                 ctcp_command = args[2].upper()
                 parameter = ' '.join(args[3:]) if len(args) > 3 else None
-                self.irc_client.send_ctcp_request(target, ctcp_command, parameter)
+                self.irc_client._send_ctcp_request(target, ctcp_command, parameter)
             case "banlist":
                 channel = args[1] if len(args) > 1 else self.irc_client.current_channel
                 if channel:
-                    self.irc_client.send_message(f'MODE {channel} +b')
+                    self.irc_client._send_message(f'MODE {channel} +b')
             case "motd":
-                self.irc_client.send_message('MOTD')
+                self.irc_client._send_message('MOTD')
             case "time":
-                self.irc_client.send_message('TIME')
+                self.irc_client._send_message('TIME')
             case "list":
-                self.irc_client.send_message('LIST')
+                self.irc_client._send_message('LIST')
             case "mac":
                 self.handle_mac_command(args)
             case "syscowsay":
@@ -786,15 +786,16 @@ class IRCClientGUI:
 
     def fortune_cowsay(self, file_name=None):
         file_name = self.get_fortune_file(file_name)
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
 
-        with open(file_name, 'r') as f:
+        with open(file_name, 'r', encoding='utf-8') as f:
             fortunes = f.read().strip().split('%')
             chosen_fortune = random.choice(fortunes).strip()
 
         wrapped_fortune_text = self.wrap_text(chosen_fortune)
         cowsay_fortune = self.cowsay(wrapped_fortune_text)
         for line in cowsay_fortune.split('\n'):
-            self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+            self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
             self.update_message_text(line + "\r\n")
             time.sleep(0.4)
 
@@ -804,7 +805,7 @@ class IRCClientGUI:
         cowsay_output = self.cowsay(wrapped_message)
         
         for line in cowsay_output.split('\n'):
-            self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+            self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
             self.update_message_text(line + "\r\n")
             time.sleep(0.4)
 
@@ -812,12 +813,12 @@ class IRCClientGUI:
         """Choose a random fortune from one of the lists"""
         file_name = self.get_fortune_file(file_name)
 
-        with open(file_name, 'r') as f:
+        with open(file_name, 'r', encoding='utf-8') as f:  # Notice the encoding parameter
             fortunes = f.read().strip().split('%')
             chosen_fortune = random.choice(fortunes).strip()
 
         for line in chosen_fortune.split('\n'):
-            self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+            self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
             self.update_message_text(line + "\r\n")
             time.sleep(0.4)
 
@@ -853,7 +854,7 @@ class IRCClientGUI:
         display_message = f"{timestamp} * {self.irc_client.nickname} rolled a {number} on a {die_type}"
 
         self.update_message_text(display_message + "\r\n")
-        self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{action_message}')
+        self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{action_message}')
 
     def handle_who_command(self, args):
         """
@@ -861,15 +862,15 @@ class IRCClientGUI:
         """
         if not args:
             # General WHO
-            self.irc_client.send_message('WHO')
+            self.irc_client._send_message('WHO')
         elif args[0].startswith('#'):
             # WHO on a specific channel
             channel = args[0]
-            self.irc_client.send_message(f'WHO {channel}')
+            self.irc_client._send_message(f'WHO {channel}')
         else:
             # WHO with mask or user host
             mask = args[0]
-            self.irc_client.send_message(f'WHO {mask}')
+            self.irc_client._send_message(f'WHO {mask}')
 
     def handle_kick_command(self, args):
         if len(args) < 3:
@@ -879,7 +880,7 @@ class IRCClientGUI:
         channel = args[2]
         reason = ' '.join(args[3:]) if len(args) > 3 else None
         kick_message = f'KICK {channel} {user}' + (f' :{reason}' if reason else '')
-        self.irc_client.send_message(kick_message)
+        self.irc_client._send_message(kick_message)
         self.update_message_text(f"Kicked {user} from {channel} for {reason}\r\n")
 
     def handle_invite_command(self, args):
@@ -888,7 +889,7 @@ class IRCClientGUI:
             return
         user = args[1]
         channel = args[2]
-        self.irc_client.send_message(f'INVITE {user} {channel}\r\n')
+        self.irc_client._send_message(f'INVITE {user} {channel}\r\n')
         self.update_message_text(f"Invited {user} to {channel}\r\n")
 
     def handle_mode_command(self, args):
@@ -907,7 +908,7 @@ class IRCClientGUI:
             mode = args[2]
 
         # Send the MODE command to the IRC server
-        self.irc_client.send_message(f'MODE {channel} {mode} {target}')
+        self.irc_client._send_message(f'MODE {channel} {mode} {target}')
         self.update_message_text(f"Attempting to set mode {mode} for {target} in {channel}\r\n")
 
     def handle_notice_command(self, args):
@@ -916,7 +917,7 @@ class IRCClientGUI:
             return
         target = args[1]
         message = ' '.join(args[2:])
-        self.irc_client.send_message(f'NOTICE {target} :{message}\r\n')
+        self.irc_client._send_message(f'NOTICE {target} :{message}\r\n')
         self.update_message_text(f"Sent NOTICE to {target}: {message}\r\n")
 
     def _handle_exec_command(self, args):
@@ -931,7 +932,7 @@ class IRCClientGUI:
             
             for line in filter(lambda l: l.strip(), output_lines):  # Skip empty or whitespace-only lines
                 # Send the line to the current IRC channel
-                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
                 # Update the GUI with the message
                 self.update_message_text(line + "\r\n")
                 time.sleep(0.5)
@@ -950,7 +951,7 @@ class IRCClientGUI:
         if macro_name in self.ASCII_ART_MACROS:
             current_time = datetime.datetime.now().strftime('%H:%M:%S')
             for line in self.ASCII_ART_MACROS[macro_name].splitlines():
-                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
                 time.sleep(0.5)
                 formatted_line = f"[{current_time}]  <{self.irc_client.nickname}> {line}\r\n"
                 self.update_message_text(formatted_line)
@@ -972,7 +973,7 @@ class IRCClientGUI:
                 if not line.strip():
                     continue
 
-                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
                 time.sleep(0.3)
 
                 current_time = datetime.datetime.now().strftime('%H:%M:%S')
@@ -1037,7 +1038,7 @@ class IRCClientGUI:
             for line in result.split("\n"):
                 if not line.strip():
                     continue
-                self.irc_client.send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
+                self.irc_client._send_message(f'PRIVMSG {self.irc_client.current_channel} :{line}')
                 current_time = datetime.datetime.now().strftime('%H:%M:%S')
                 formatted_line = f"[{current_time}]  <{self.irc_client.nickname}> {line}"
                 self.update_message_text(formatted_line + "\r\n")
@@ -1273,7 +1274,7 @@ class IRCClientGUI:
         # Check if the socket is still open before attempting to shut it down
         if hasattr(self.irc_client, 'irc'):
             try:
-                self.irc_client.send_message('QUIT')
+                self.irc_client._send_message('QUIT')
                 self.irc_client.irc.shutdown(socket.SHUT_RDWR)
             except OSError as e:
                 if e.errno == 9:  # Bad file descriptor
@@ -1582,7 +1583,7 @@ class IRCClientGUI:
         if channel not in self.irc_client.joined_channels:
             # Add the channel to the irc_client's list of channels
             self.irc_client.joined_channels.append(channel)
-        self.irc_client.send_message(f"JOIN {channel}")
+        self.irc_client._send_message(f"JOIN {channel}")
         # Update the GUI's list of channels
         self.update_joined_channels_list(channel)
 
