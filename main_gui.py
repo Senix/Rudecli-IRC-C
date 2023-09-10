@@ -624,14 +624,8 @@ class IRCClientGUI:
                 for channel in self.irc_client.joined_channels:
                     self.irc_client._send_message(f'PRIVMSG {channel} :{message}')
                 self.update_message_text(f'Message sent to all joined channels: {message}\r\n')
-            case "friend": #adds friend
-                friend_name = user_input.split()[1]
-                if friend_name not in self.irc_client.friend_list:
-                    self.irc_client.friend_list.append(friend_name)
-                    self.irc_client.save_friend_list()
-                    self.update_message_text(f"{friend_name} added to friends.\r\n")
-                else:
-                    self.update_message_text(f"{friend_name} is already in your friend list.\r\n")
+            case "friend":  # adds friend
+                self.add_friend(user_input)
             case "friends":
                 self.update_message_text(f"<Friends List>\r\n")
                 for person in self.irc_client.friend_list:
@@ -651,7 +645,7 @@ class IRCClientGUI:
                 target = args[1]
                 ctcp_command = args[2].upper()
                 parameter = ' '.join(args[3:]) if len(args) > 3 else None
-                self.irc_client._send_ctcp_request(target, ctcp_command, parameter)
+                self.irc_client.send_ctcp_request(target, ctcp_command, parameter)
             case "banlist":
                 channel = args[1] if len(args) > 1 else self.irc_client.current_channel
                 if channel:
@@ -688,6 +682,29 @@ class IRCClientGUI:
             case _:
                 self.update_message_text(f"Unkown Command! Type '/help' for help.\r\n")
         self.input_entry.delete(0, tk.END)
+
+    def add_friend(self, user_input):
+        user_input_split = user_input.split()
+        
+        # Check if the user has provided a friend's name to add
+        if len(user_input_split) < 2:
+            self.update_message_text("Usage: /friend <person> to add a friend.\r\n")
+            self.update_message_text("Use /friends to list all friends.\r\n")
+            return
+        
+        friend_name = user_input_split[1]
+        
+        # Check if friend_name is not empty or None
+        if not friend_name:
+            self.update_message_text("Friend name cannot be empty.\r\n")
+            return
+        
+        if friend_name not in self.irc_client.friend_list:
+            self.irc_client.friend_list.append(friend_name)
+            self.irc_client.save_friend_list()
+            self.update_message_text(f"{friend_name} added to friends.\r\n")
+        else:
+            self.update_message_text(f"{friend_name} is already in your friend list.\r\n")
 
     def handle_cowsay_command(self, args):
         script_directory = os.path.dirname(os.path.abspath(__file__))
