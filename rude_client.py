@@ -10,6 +10,7 @@ class IRCClient:
         self.decoder = irctokens.StatefulDecoder()
         self.encoder = irctokens.StatefulEncoder()
         self.message_queue = Queue()
+        self.send_message_queue = Queue()
         self.exit_event = threading.Event()
 
         # Data structures and storage properties
@@ -74,47 +75,63 @@ class IRCClient:
         """
         Connect to the IRC server
         """
-        
-        # Determine if running as a script or as a frozen executable
-        if getattr(sys, 'frozen', False):
-            # Running as compiled
-            script_directory = os.path.dirname(sys.executable)
-        else:
-            # Running as script
-            script_directory = os.path.dirname(os.path.abspath(__file__))
-            
-        # Set absolute path for the Splash directory
-        splash_dir = os.path.join(script_directory, 'Splash')
-        splash_files = [f for f in os.listdir(splash_dir) if os.path.isfile(os.path.join(splash_dir, f))]
-        selected_splash_file = random.choice(splash_files)
+        try:
+            # Determine if running as a script or as a frozen executable
+            if getattr(sys, 'frozen', False):
+                # Running as compiled
+                script_directory = os.path.dirname(sys.executable)
+            else:
+                # Running as script
+                script_directory = os.path.dirname(os.path.abspath(__file__))
 
-        # Read the selected ASCII art file
-        with open(os.path.join(splash_dir, selected_splash_file), 'r', encoding='utf-8') as f:
-            clover_art = f.read()
-        #
-        print(f'Connecting to server: {self.server}:{self.port}')
-        
-        # Use socket.create_connection to automatically determine address family
-        self.irc = socket.create_connection((self.server, self.port))
+            # Set absolute path for the Splash directory
+            splash_dir = os.path.join(script_directory, 'Splash')
+            splash_files = [f for f in os.listdir(splash_dir) if os.path.isfile(os.path.join(splash_dir, f))]
+            selected_splash_file = random.choice(splash_files)
 
-        # Wrap the socket with SSL if needed
-        if self.ssl_enabled:
-            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            context.check_hostname = True
-            context.verify_mode = ssl.CERT_REQUIRED
-            self.irc = context.wrap_socket(self.irc, server_hostname=self.server)
+            # Read the selected ASCII art file
+            with open(os.path.join(splash_dir, selected_splash_file), 'r', encoding='utf-8') as f:
+                clover_art = f.read()
 
-        self.irc_client_gui.update_message_text(f'Connecting to server: {self.server}:{self.port}\n')
+            print(f'Connecting to server: {self.server}:{self.port}')
 
-        if self.sasl_enabled:
-            self.irc.send(bytes('CAP REQ :sasl\r\n', 'UTF-8'))
+            # Use socket.create_connection to automatically determine address family
+            self.irc = socket.create_connection((self.server, self.port))
 
-        self.irc.send(bytes(f'NICK {self.nickname}\r\n', 'UTF-8'))
-        self.irc.send(bytes(f'USER {self.nickname} 0 * :{self.nickname}\r\n', 'UTF-8'))
+            # Wrap the socket with SSL if needed
+            if self.ssl_enabled:
+                context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+                context.check_hostname = True
+                context.verify_mode = ssl.CERT_REQUIRED
+                self.irc = context.wrap_socket(self.irc, server_hostname=self.server)
 
-        print(f'Connected to server: {self.server}:{self.port}')
-        self.irc_client_gui.update_message_text(f'Connected to server: {self.server}:{self.port}\n')
-        self.irc_client_gui.update_message_text(clover_art)
+            self.irc_client_gui.update_message_text(f'Connecting to server: {self.server}:{self.port}\n')
+
+            if self.sasl_enabled:
+                self.irc.send(bytes('CAP REQ :sasl\r\n', 'UTF-8'))
+
+            self.irc.send(bytes(f'NICK {self.nickname}\r\n', 'UTF-8'))
+            self.irc.send(bytes(f'USER {self.nickname} 0 * :{self.nickname}\r\n', 'UTF-8'))
+
+            print(f'Connected to server: {self.server}:{self.port}')
+            self.irc_client_gui.update_message_text(f'Connected to server: {self.server}:{self.port}\n')
+            self.irc_client_gui.update_message_text(clover_art)
+
+        except socket.timeout:
+            print("Connection timed out.")
+            self.irc_client_gui.update_message_text("Connection timed out.\n")
+
+        except socket.error as e:
+            print(f"Socket error: {e}")
+            self.irc_client_gui.update_message_text(f"Socket error: {e}\n")
+
+        except ssl.SSLError as e:
+            print(f"SSL error: {e}")
+            self.irc_client_gui.update_message_text(f"SSL error: {e}\n")
+
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            self.irc_client_gui.update_message_text(f"Unexpected error: {e}\n")
 
     def disconnect(self):
         """
@@ -156,6 +173,7 @@ class IRCClient:
         self.irc_client_gui.update_message_text(f"Disconnected\r\n")
         self.irc_client_gui.update_user_list(channel)
         self.irc_client_gui.update_joined_channels_list(channel)
+        self.irc_client_gui.clear_chat_window()
 
     def reconnect(self, server=None, port=None):
         """
@@ -226,6 +244,22 @@ class IRCClient:
             # Log the message with the timestamp for display
             self.log_message(target_channel, self.nickname, formatted_message, is_sent=True)
 
+    def _send_message(self, message):
+        """
+        Enqueues messages to be sent by the sender_thread.
+        """
+        self.send_message_queue.put(message)
+
+    def process_send_queue(self):
+        while True:
+            message = self.send_message_queue.get()
+            try:
+                self.send_message(message)
+            except BrokenPipeError:
+                # Handle socket being closed
+                print("Socket closed.")
+            self.send_message_queue.task_done()
+
     def send_ctcp_request(self, target, command, parameter=None):
         """
         Send a CTCP request to the specified target (user or channel).
@@ -234,13 +268,13 @@ class IRCClient:
         if parameter:
             message += f' {parameter}'
         message += '\x01'
-        self.send_message(f'PRIVMSG {target} :{message}')
+        self._send_message(f'PRIVMSG {target} :{message}')
 
     def change_nickname(self, new_nickname):
         """
         Changes your nickname
         """
-        self.send_message(f'NICK {new_nickname}')
+        self._send_message(f'NICK {new_nickname}')
         self.nickname = new_nickname
         self.irc_client_gui.update_message_text(f'Nickname changed to: {new_nickname}\n')
 
@@ -248,7 +282,7 @@ class IRCClient:
         """
         Joins a channel
         """
-        self.send_message(f'JOIN {channel}')
+        self._send_message(f'JOIN {channel}')
         self.joined_channels.append(channel)
         self.channel_messages[channel] = []
         self.user_list[channel] = []
@@ -259,7 +293,7 @@ class IRCClient:
         """
         Leaves a channel
         """
-        self.send_message(f'PART {channel}')
+        self._send_message(f'PART {channel}')
         if channel in self.joined_channels:
             self.joined_channels.remove(channel)
         if channel in self.channel_messages:
@@ -277,7 +311,7 @@ class IRCClient:
         while not self.exit_event.is_set():
             time.sleep(195)
             param = self.server
-            self.send_message(f'PING {param}')
+            self._send_message(f'PING {param}')
 
     def ping_server(self, target=None):
         """
@@ -287,14 +321,14 @@ class IRCClient:
             param = target
         else:
             param = self.server
-        self.send_message(f'PING {param}')
+        self._send_message(f'PING {param}')
 
     def sync_user_list(self):
         """
         Syncs the user list via /users
         """
         self.user_list[self.current_channel] =[]
-        self.send_message(f'NAMES {self.current_channel}')
+        self._send_message(f'NAMES {self.current_channel}')
 
     def strip_ansi_escape_sequences(self, text):
         # Strip ANSI escape sequences
@@ -514,15 +548,15 @@ class IRCClient:
     def handle_ping(self, tokens):
         ping_param = tokens.params[0]
         pong_response = f'PONG {ping_param}'
-        self.send_message(pong_response)
+        self._send_message(pong_response)
 
     def handle_cap(self, tokens):
         if "ACK" in tokens.params and "sasl" in tokens.params:
-            self.send_message("AUTHENTICATE PLAIN")
+            self._send_message("AUTHENTICATE PLAIN")
         elif "NAK" in tokens.params:
             print("Server does not support SASL.")
             self.irc_client_gui.update_server_feedback_text("Error: Server does not support SASL.")
-            self.send_message("CAP END")
+            self._send_message("CAP END")
 
     def handle_sasl_auth(self, tokens):
         if tokens.params[0] == "+":
@@ -530,23 +564,23 @@ class IRCClient:
             import base64
             auth_string = f"{self.sasl_username}\0{self.sasl_username}\0{self.sasl_password}"
             encoded_auth = base64.b64encode(auth_string.encode()).decode()
-            self.send_message(f"AUTHENTICATE {encoded_auth}")
+            self._send_message(f"AUTHENTICATE {encoded_auth}")
 
     def handle_sasl_successful(self):
         print("SASL authentication successful.")
         self.irc_client_gui.update_server_feedback_text("SASL authentication successful.")
         # End the capability negotiation after successful SASL authentication
-        self.send_message("CAP END")
+        self._send_message("CAP END")
 
     def handle_sasl_failed(self):
         print("SASL authentication failed!")
         self.irc_client_gui.update_server_feedback_text("Error: SASL authentication failed!")
         # End the capability negotiation even if SASL authentication failed
-        self.send_message("CAP END")
+        self._send_message("CAP END")
 
     def handle_welcome_or_end_of_motd(self, raw_message):
         self.irc_client_gui.update_server_feedback_text(raw_message)
-        self.send_message(f'PRIVMSG NickServ :IDENTIFY {self.nickserv_password}')
+        self._send_message(f'PRIVMSG NickServ :IDENTIFY {self.nickserv_password}')
         if not self.has_auto_joined:
             for channel in self.auto_join_channels:
                 self.join_channel(channel)
@@ -989,25 +1023,25 @@ class IRCClient:
         if ctcp_command == "VERSION":
             # Respond to VERSION request
             version_reply = "\x01VERSION IRishC v2.7\x01"
-            self.send_message(f'NOTICE {sender} :{version_reply}')
+            self._send_message(f'NOTICE {sender} :{version_reply}')
 
         elif ctcp_command == "CTCP":
             # Respond to CTCP request
             ctcp_response = "\x01CTCP response\x01"
-            self.send_message(f'NOTICE {sender} :{ctcp_response}')
+            self._send_message(f'NOTICE {sender} :{ctcp_response}')
 
         elif ctcp_command == "TIME":
             import pytz
             dublin_tz = pytz.timezone('Europe/Dublin')
             dublin_time = datetime.datetime.now(dublin_tz).strftime("%Y-%m-%d %H:%M:%S")
             time_reply = "\x01TIME " + dublin_time + "\x01"
-            self.send_message(f'NOTICE {sender} :{time_reply}')
+            self._send_message(f'NOTICE {sender} :{time_reply}')
 
         elif ctcp_command == "PING":
             if len(ctcp_parts) > 1:
                 ping_data = ctcp_parts[1]
                 ping_reply = "\x01PING " + ping_data + "\x01"
-                self.send_message(f'NOTICE {sender} :{ping_reply}')
+                self._send_message(f'NOTICE {sender} :{ping_reply}')
             else:
                 print("Received PING CTCP request without timestamp/data.")
 
@@ -1015,12 +1049,12 @@ class IRCClient:
             # Respond to FINGER request (customize as per requirement)
             version_data = "IRishC v2.7"
             finger_reply = f"\x01FINGER User: {self.nickname}, {self.server}, {version_data}\x01"
-            self.send_message(f'NOTICE {sender} :{finger_reply}')
+            self._send_message(f'NOTICE {sender} :{finger_reply}')
 
         elif ctcp_command == "CLIENTINFO":
             # Respond with supported CTCP commands
             client_info_reply = "\x01CLIENTINFO VERSION CTCP TIME PING FINGER SOUND\x01"
-            self.send_message(f'NOTICE {sender} :{client_info_reply}')
+            self._send_message(f'NOTICE {sender} :{client_info_reply}')
 
         elif ctcp_command == "SOUND":
             if self.sound_ctcp_count < self.sound_ctcp_limit:
@@ -1039,7 +1073,7 @@ class IRCClient:
             moo_reply = "MOO!"
             version_data = "IRishC v2.7"
             cow_hello = "Hi Cow!"
-            self.send_message(f'NOTICE {sender} :{moo_reply}, {version_data}, {cow_hello}')
+            self._send_message(f'NOTICE {sender} :{moo_reply}, {version_data}, {cow_hello}')
 
         else:
             if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
@@ -1373,7 +1407,7 @@ class IRCClient:
         """
         Who is this? Sends a whois request
         """
-        self.send_message(f'WHOIS {target}')
+        self._send_message(f'WHOIS {target}')
 
     def display_channel_list_window(self):
         """
@@ -1406,6 +1440,10 @@ class IRCClient:
             self.receive_thread = threading.Thread(target=self.handle_incoming_message)
             self.receive_thread.daemon = True
             self.receive_thread.start()
+
+            self.sender_thread = threading.Thread(target=self.process_send_queue)
+            self.sender_thread.daemon = True
+            self.sender_thread.start()
 
             self.stay_alive_thread = threading.Thread(target=self.keep_alive)
             self.stay_alive_thread.daemon = True
