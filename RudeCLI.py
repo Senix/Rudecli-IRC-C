@@ -112,11 +112,10 @@ class IRCClient:
             while '\r\n' in buffer:
                 line, buffer = buffer.split('\r\n', 1)  # Split at the first '\r\n'
                 
-                # The rest of your processing code here, replace raw_message with line
                 try:
-                    if len(line.strip()) == 0:  # Ignore empty or whitespace-only lines
+                    if len(line.strip()) == 0:  
                         continue
-                    tokens = irctokens.tokenise(line)  # replace raw_message with line
+                    tokens = irctokens.tokenise(line)  
                 except ValueError as e:
                     self.add_chat_message(f"Error: {e}")
                     continue  # Skip command-less lines
