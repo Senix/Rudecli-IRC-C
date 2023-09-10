@@ -16,29 +16,6 @@ to use ssl or not you can designate by port: no ssl: 6667 yes ssl: 6697
 ssl_enabled = False needs port 6667
 ssl_enabled = True needs port 6697(usually)
 
-    __init__(self): This is the constructor method that initializes the IRCClient object. It sets up instance variables for the joined channels, the current channel, and the channel messages.
-
-    read_config(self, config_file): This method reads the IRC configuration from a specified config_file using the configparser module. It retrieves the server, port, and nickname from the configuration file and assigns them to the corresponding instance variables.
-
-    connect(self): This method establishes a connection with the IRC server. It creates a socket, connects to the specified server and port, and sends the necessary IRC commands to register the client with the server.
-
-    send_message(self, message): This method sends a message to the IRC server. It takes a message as a parameter, which is sent to the server over the established socket connection.
-
-    join_channel(self, channel): This method joins a specified channel. It sends the JOIN command to the IRC server to join the channel, updates the joined_channels list and initializes an empty list in channel_messages to store messages for the joined channel.
-
-    leave_channel(self, channel): This method leaves a specified channel. It sends the PART command to the IRC server to leave the channel, updates the joined_channels list, and removes the channel from the channel_messages dictionary.
-
-    list_channels(self): This method sends a LIST command to the IRC server to retrieve a list of available channels.
-
-    receive_messages(self): This method runs in a separate thread and continuously listens for incoming messages from the IRC server. It handles PING requests to keep the connection alive, processes PRIVMSG messages, stores them in the channel_messages dictionary, and prints received messages for the current channel. If an ERROR message is received, it sends a QUIT command to the server and exits the program.
-
-    log_message(self, channel, sender, message, is_sent=False): This method logs a message to a file. It takes the channel, sender, and message as parameters and appends them to the respective channel's log file. If is_sent is set to True, it indicates that the message is sent by the client and includes the client's nickname in the log.
-
-    start(self): This method is the main loop that handles user input. It initiates the connection, starts the receive_messages thread, and prompts the user for input. It processes various commands entered by the user, such as joining/leaving channels, switching channels, listing joined channels, displaying saved messages, and quitting the client.
-
-    display_channel_messages(self): This method displays the messages for the current channel. It retrieves the messages from the channel_messages dictionary and prints them on the console.
-
-    notify_channel_activity(self, channel): This method notifies the user of activity on a channel their currently not watching.
 """
 
 import ssl
@@ -51,6 +28,8 @@ import datetime
 import irctokens
 import re
 import os
+import curses
+
 
 class IRCClient:
     def __init__(self):
@@ -121,40 +100,37 @@ class IRCClient:
             print(f'Sent Keep Alive: Ping')
 
     def handle_incoming_message(self):
+        buffer = ""
         while True:
             data = self.irc.recv(4096).decode('UTF-8', errors='ignore')
             if not data:
                 break
 
-            received_messages = ""  # Variable to store multiple incoming messages
+            buffer += data  # Append new data to the buffer
 
-            # Split the received data into individual messages
-            messages = data.split('\r\n')
-
-            # Process each message
-            for raw_message in messages:
-                # Tokenize the incoming message
+            # Process complete messages and keep the remaining in the buffer
+            while '\r\n' in buffer:
+                line, buffer = buffer.split('\r\n', 1)  # Split at the first '\r\n'
+                
+                # The rest of your processing code here, replace raw_message with line
                 try:
-                    if len(raw_message) == 0: #ignore empty lines.
+                    if len(line.strip()) == 0:  # Ignore empty or whitespace-only lines
                         continue
-                    tokens = irctokens.tokenise(raw_message)
+                    tokens = irctokens.tokenise(line)  # replace raw_message with line
                 except ValueError as e:
-                    print(f"Error: {e}")
+                    self.add_chat_message(f"Error: {e}")
                     continue  # Skip command-less lines
 
                 # Extract sender's nickname
-                if tokens.source is not None:
-                    sender = tokens.hostmask.nickname
-                else:
-                    sender = None
+                sender = tokens.hostmask.nickname if tokens.source is not None else None
 
                 # Handle specific commands
                 if tokens.command == "PING":
-                    # Respond with PONG (PNOG)
+                    # Respond with PONG
                     ping_param = tokens.params[0]
                     pong_response = f'PONG {ping_param}'
                     self.send_message(pong_response)
-                    print(f'PING received: Response: PONG')
+                    self.add_chat_message(f'PING received: Response: PONG')
 
                 elif tokens.command == "PRIVMSG":
                     target = tokens.params[0]
@@ -162,14 +138,13 @@ class IRCClient:
 
                     # Check if it's an ACTION message
                     if message_content.startswith("\x01ACTION") and message_content.endswith("\x01"):
-                        # Remove the CTCP ACTION tags and extract the action content
                         action_content = message_content[8:-1]
                         action_message = f'* {sender} {action_content}'
                         if target not in self.channel_messages:
                             self.channel_messages[target] = []
                         self.channel_messages[target].append((sender, action_message))
                         if target == self.current_channel:
-                            received_messages += f'{action_message}\n'
+                            self.add_chat_message(f'{action_message}')
                         else:
                             self.notify_channel_activity(target)  # Notify user about activity
 
@@ -179,18 +154,19 @@ class IRCClient:
                             self.channel_messages[target] = []
                         self.channel_messages[target].append((sender, message_content))
                         if target == self.current_channel:
-                            received_messages += f'<{sender}> {message_content}\n'
+                            self.add_chat_message(f'<{sender}> {message_content}')
                         else:
                             self.notify_channel_activity(target)  # Notify user about activity
 
+                    # Log the message
+                    self.log_message(target, sender, message_content)
+
                 else:
                     # Server message
-                    print(f': {raw_message}')
+                    self.add_chat_message(f': {line}')
 
-            if received_messages:
-                print(received_messages, end="", flush=True)
-                received_messages = ""
-                self.log_message(target, sender, message_content)
+            # Refresh all windows to reflect the latest changes
+            self.refresh_windows()
 
     def log_message(self, channel, sender, message, is_sent=False):
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -207,55 +183,6 @@ class IRCClient:
     def notify_channel_activity(self, channel):
         print(f'Activity in channel {channel}!')
 
-    def start(self,):
-        self.connect()
-        receive_thread = threading.Thread(target=self.handle_incoming_message)
-        receive_thread.start()
-
-        #keep alive thread
-        stay_alive = threading.Thread(target=self.keep_alive)
-        stay_alive.start()
-
-        while True:
-            try:
-                user_input = input(f'{self.current_channel} $ {self.nickname} ε>')
-                if user_input.startswith('/join'):
-                    channel_name = user_input.split()[1]
-                    self.join_channel(channel_name)
-                elif user_input.startswith('/leave'):
-                    channel_name = user_input.split()[1]
-                    self.leave_channel(channel_name)
-                elif user_input.startswith('/ch'):
-                    print(f'{self.joined_channels}')
-                elif user_input.startswith('/sw'):
-                    channel_name = user_input.split()[1]
-                    self.current_channel = channel_name
-                    print(f'Switched to channel {self.current_channel}')
-                    self.display_channel_messages()
-                elif user_input.startswith('/messages'):
-                    self.display_channel_messages()
-                elif user_input.startswith('/quit'):
-                    self.send_message('QUIT')
-                    sys.exit(0)
-                elif user_input.startswith('/help'):
-                    print(f'/join to join a channel')
-                    print(f'/leave to leave a channel')
-                    print(f'/ch to list joined channels')
-                    print(f'/sw <channel> to switch to given channel')
-                    print(f'/messages to display any saved channel messages')
-                    print(f'/quit exits client')
-                elif self.current_channel:
-                    self.send_message(f'PRIVMSG {self.current_channel} :{user_input}')
-                    self.log_message(self.current_channel, self.nickname, user_input, is_sent=True)
-                    print(f'<{self.nickname}> {user_input}')
-                else:
-                    print('You are not in a channel. Use /join <channel> to join a channel.')
-
-
-            except KeyboardInterrupt:
-                self.send_message('QUIT')
-                sys.exit(0)
-
     def display_channel_messages(self):
         if self.current_channel in self.channel_messages:
             messages = self.channel_messages[self.current_channel]
@@ -265,9 +192,121 @@ class IRCClient:
         else:
             print('No messages to display in the current channel.')
 
-if __name__ == '__main__':
-    config_file = 'conf.rude'
+class CursesIRCClient(IRCClient):
+    def __init__(self, stdscr):
+        super().__init__()
+        self.stdscr = stdscr
+        curses.start_color()
+        curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLACK)
+        self.setup_windows()
 
-    irc_client = IRCClient()
+    def setup_windows(self):
+        self.status_window = curses.newwin(1, 80, 0, 0)
+        self.chat_window = curses.newwin(22, 80, 1, 0)
+        self.input_window = curses.newwin(1, 80, 23, 0)
+
+        self.chat_window.scrollok(True)
+
+    def refresh_windows(self):
+        self.status_window.refresh()
+        self.chat_window.refresh()
+        self.input_window.refresh()
+
+    def update_status(self, text):
+        self.status_window.clear()
+        self.status_window.addstr(0, 0, text)
+        self.refresh_windows()
+
+    def add_chat_message(self, text):
+        self.chat_window.scroll(1)
+        self.chat_window.addstr(21, 0, text)
+        self.refresh_windows()
+
+    def start(self):
+        self.connect()
+
+        # Start receive and keep alive threads
+        receive_thread = threading.Thread(target=self.handle_incoming_message)
+        receive_thread.daemon = True
+        receive_thread.start()
+        stay_alive = threading.Thread(target=self.keep_alive)
+        stay_alive.daemon = True
+        stay_alive.start()
+
+        while True:
+            # Clear the input window and update the status
+            self.input_window.clear()
+            self.update_status(f'{self.current_channel} $ {self.nickname} ε>')
+
+            # Initialize an empty string to hold user input
+            user_input = ""
+
+            while True:
+                # Get a character from the user
+                ch = self.input_window.getch()
+
+                # If Enter is pressed, break the loop
+                if ch == ord('\n'):
+                    break
+                
+                elif ch == curses.KEY_BACKSPACE or ch == 127:  # Handle backspace
+                    # Remove last character from user_input
+                    user_input = user_input[:-1]
+                    
+                    # Move the cursor back one position and delete the character
+                    y, x = self.input_window.getyx()
+                    self.input_window.move(y, x-1)
+                    self.input_window.delch()
+
+                else:
+                    # Make sure the cursor position doesn't exceed the window width
+                    if len(user_input) + len(f'{self.current_channel} $ {self.nickname} ε>') < self.input_window.getmaxyx()[1]:
+                        # Append the character to user input and display it
+                        user_input += chr(ch)
+                        self.input_window.addstr(0, len(user_input) + len(f'{self.current_channel} $ {self.nickname} ε>') - 1, chr(ch))
+
+            # Convert the captured input to a UTF-8 string
+            user_input = user_input.encode('utf-8').decode('utf-8')
+
+            # Process the user input
+            if user_input.startswith('/join'):
+                channel_name = user_input.split()[1]
+                self.join_channel(channel_name)
+                self.add_chat_message(f'Joined channel: {channel_name}')
+            elif user_input.startswith('/leave'):
+                channel_name = user_input.split()[1]
+                self.leave_channel(channel_name)
+                self.add_chat_message(f'Left channel: {channel_name}')
+            elif user_input.startswith('/ch'):
+                joined_channels_str = ', '.join(self.joined_channels)
+                self.add_chat_message(f'Joined channels: {joined_channels_str}')
+            elif user_input.startswith('/sw'):
+                channel_name = user_input.split()[1]
+                self.current_channel = channel_name
+                self.add_chat_message(f'Switched to channel {self.current_channel}')
+            elif user_input.startswith('/messages'):
+                self.display_channel_messages()
+            elif user_input.startswith('/quit'):
+                self.send_message('QUIT')
+                sys.exit(0)
+            elif user_input.startswith('/help'):
+                help_text = "/join to join a channel, /leave to leave a channel, /ch to list joined channels, /sw <channel> to switch, /messages to show messages, /quit to exit."
+                self.add_chat_message(help_text)
+            elif self.current_channel:
+                self.send_message(f'PRIVMSG {self.current_channel} :{user_input}')
+                self.log_message(self.current_channel, self.nickname, user_input, is_sent=True)
+                self.add_chat_message(f'<{self.nickname}> {user_input}')
+            else:
+                self.add_chat_message('You are not in a channel. Use /join <channel> to join a channel.')
+
+            # Refresh all windows to reflect the latest changes
+            self.refresh_windows()
+
+def main(stdscr):
+    config_file = 'conf.rude'
+    irc_client = CursesIRCClient(stdscr)
     irc_client.read_config(config_file)
     irc_client.start()
+
+if __name__ == '__main__':
+    curses.wrapper(main)
