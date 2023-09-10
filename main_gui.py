@@ -517,7 +517,6 @@ class IRCClientGUI:
                 self.irc_client.disconnect()
             case "reconnect": #reconnects to network
                 self.irc_client.reconnect()
-                # Clear the input entry
             case "connect": #connects to new network.
                 server = args[1] if len(args) > 1 else None
                 port = int(args[2]) if len(args) > 2 else None
@@ -528,6 +527,12 @@ class IRCClientGUI:
             case "part": #part channel
                 channel_name = user_input.split()[1]
                 self.irc_client.leave_channel(channel_name)
+            case "quote": #sends raw IRC message to the server
+                if len(args) > 1:
+                    raw_message = ' '.join(args[1:])
+                    self.irc_client._send_message(raw_message)
+                else:
+                    print("Usage: /quote [raw IRC message]")
             case "query": #open a DM with a user
                 target_user = user_input.split()[1] if len(user_input.split()) > 1 else None
                 if not target_user:
