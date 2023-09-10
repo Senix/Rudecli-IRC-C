@@ -1240,10 +1240,10 @@ class IRCClientGUI:
         self.joined_channels_text.tag_configure("mentioned", background="red")
         self.joined_channels_text.tag_configure("activity", background="green")
         self.joined_channels_text.tag_configure("green_text", foreground="#39ff14")
-        
+
         # Set certain tags to raise over others.
-        self.joined_channels_text.tag_raise("selected")
         self.joined_channels_text.tag_raise("mentioned")
+        self.joined_channels_text.tag_raise("selected")
 
         # Combine channels and DM users for display
         all_items = self.irc_client.joined_channels + [f"DM: {user}" for user in self.irc_client.dm_users]
@@ -1253,25 +1253,35 @@ class IRCClientGUI:
         self.joined_channels_text.delete(1.0, tk.END)
         self.joined_channels_text.insert(tk.END, all_items_text)
 
-        # Remove the "selected" tag from the entire text widget
-        self.joined_channels_text.tag_remove("selected", "1.0", tk.END)
-
         # Iterate through the lines in the joined_channels_text widget
         for idx, line in enumerate(self.joined_channels_text.get("1.0", tk.END).splitlines()):
-            if line in self.channels_with_activity:  # apply the "activity" tag first
-                self.joined_channels_text.tag_add("activity", f"{idx + 1}.0", f"{idx + 1}.end")
-            if line in self.channels_with_mentions:  # then apply the "mentioned" tag
-                self.joined_channels_text.tag_add("mentioned", f"{idx + 1}.0", f"{idx + 1}.end")
-            if line == self.irc_client.current_channel or line == f"DM: {self.irc_client.current_channel}":  # apply the "selected" tag if it's the current channel or DM
-                self.joined_channels_text.tag_add("selected", f"{idx + 1}.0", f"{idx + 1}.end")
-                self.update_window_title(self.irc_client.nickname, self.irc_client.current_channel)  # using the actual current channel or DM
+            start_idx = f"{idx + 1}.0"
+            end_idx = f"{idx + 1}.end"
+
+            is_selected = (line == self.irc_client.current_channel) or (line == f"DM: {self.irc_client.current_channel}")
+
+            # If the line is selected, apply the "selected" tag and remove all other tags
+            if is_selected:
+                for tag in ["activity", "mentioned"]:
+                    self.joined_channels_text.tag_remove(tag, start_idx, end_idx)
+                self.joined_channels_text.tag_add("selected", start_idx, end_idx)
+                self.update_window_title(self.irc_client.nickname, self.irc_client.current_channel)
+                continue  # Skip to next iteration since 'selected' takes precedence
+
+            # Check if the line is mentioned
+            if line in self.channels_with_mentions:
+                self.joined_channels_text.tag_add("mentioned", start_idx, end_idx)
+
+            # If the line has activity and is not selected, apply the "activity" tag
+            if line in self.channels_with_activity and not is_selected:
+                self.joined_channels_text.tag_add("activity", start_idx, end_idx)
 
         ascii_art = """
         .-.-.
        (_\\|/_)
        ( /|\\ )    
         '-'-'`-._"""
-        
+
         # Add the ASCII art at the end
         self.joined_channels_text.insert(tk.END, "\n" + ascii_art)
         start_index = self.joined_channels_text.index(tk.END + "- {} lines linestart".format(ascii_art.count("\n") + 1))
