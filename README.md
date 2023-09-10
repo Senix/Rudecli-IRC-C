@@ -1,4 +1,3 @@
-RudeIRC
 RudeIRC assumes conf.rude is available and configed properly:
 
 Config Example:
