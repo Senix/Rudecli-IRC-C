@@ -410,53 +410,51 @@ class IRCClientGUI:
         return dict(config["IRC"]) # Convert to dictionary
 
     def switch_channel(self, event):
-        # Get the clicked position and line number
+        # Save the current input to the old channel or DM
+        old_channel = self.irc_client.current_channel
+        self.channel_input_dict[old_channel] = self.input_entry.get()
+
+        # get the selected channel or DM from the clicked position
         index = self.joined_channels_text.index("@%d,%d" % (event.x, event.y))
         line_num = int(index.split(".")[0])
         selection = self.joined_channels_text.get(f"{line_num}.0", f"{line_num}.end").strip()
+        self.current_channel = selection
 
-        if not selection:
-            return "break"  # Do nothing if no valid selection
-        
-        # Save the input and clear chat
-        old_channel = self.irc_client.current_channel
-        self.channel_input_dict[old_channel] = self.input_entry.get()
+        # Clear the main chat window
         self.clear_chat_window()
 
-        # Update based on whether it's a DM or a channel
-        is_dm = selection.startswith("DM: ")
-        if is_dm:
+        if selection.startswith("DM: "):  # If it's a DM
             user = selection[4:]
             if user in self.irc_client.dm_users:
-                self.display_dm_messages(user)
+                self.display_dm_messages(user)  # Display DMs with this user
                 self.update_window_title(self.irc_client.nickname, f"DM with {user}")
-                self.irc_client.current_channel = user
-        else:
-            if selection in self.irc_client.joined_channels:
-                self.irc_client.current_channel = selection
-                self.display_channel_messages()
-                self.update_window_title(self.irc_client.nickname, selection)
+                self.irc_client.current_channel = user  # Since it's a DM, not a channel
+                self.joined_channels_text.tag_remove("dm", f"{line_num}.0", f"{line_num}.end")
 
-        # Highlight the new selection
-        self.joined_channels_text.tag_remove("selected", 1.0, tk.END)
+        elif selection in self.irc_client.joined_channels:  # If it's a channel
+            self.irc_client.current_channel = selection
+            self.display_channel_messages()  # Display messages from this channel
+            self.update_window_title(self.irc_client.nickname, selection)
+
+        # Highlight the selected channel/DM
+        if self.selected_channel:
+            self.joined_channels_text.tag_remove("selected", 1.0, tk.END)
         self.joined_channels_text.tag_add("selected", f"{line_num}.0", f"{line_num}.end")
+        self.selected_channel = selection
 
-        # Load saved input
+        # Load the saved input for the new channel or DM
         new_channel = self.irc_client.current_channel
         saved_input = self.channel_input_dict.get(new_channel, "")
         self.input_entry.delete(0, tk.END)
         self.input_entry.insert(0, saved_input)
 
-        # Reset activity and mentions for the clicked channel
-        line_indices = f"{line_num}.0", f"{line_num}.end"
-        self.joined_channels_text.tag_remove("mentioned", *line_indices)
-        self.joined_channels_text.tag_remove("activity", *line_indices)
-
+        # Reset the color of the clicked channel by removing the "mentioned" and "activity" tags
+        self.joined_channels_text.tag_remove("mentioned", f"{line_num}.0", f"{line_num}.end")
+        self.channels_with_mentions = []
+        self.joined_channels_text.tag_remove("activity", f"{line_num}.0", f"{line_num}.end")
         if selection in self.channels_with_activity:
             self.channels_with_activity.remove(selection)
-        if selection in self.channels_with_mentions:
-            self.channels_with_mentions.remove(selection)
-
+            
         return "break"
 
     def clear_chat_window(self):
