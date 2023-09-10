@@ -72,7 +72,7 @@ class ConfigWindow(tk.Toplevel):
 
         self.font_var = tk.StringVar(self)
         self.font_var.set(self.config_font.actual()['family'])  #set the default font based on current font
-        fonts = ["Monospace", "Consolas", "Liberation Mono", "DejaVu Sans Mono", "Hack"]
+        fonts = ["Monospace", "Consolas", "Hack"]
         font_dropdown = tk.OptionMenu(self, self.font_var, *fonts, command=self.update_font)
         font_dropdown.grid(row=6, column=1, padx=5, pady=5)
 
