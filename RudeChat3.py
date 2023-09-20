@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import ssl
 import configparser
 import datetime
@@ -36,6 +37,11 @@ class AsyncIRCClient:
         self.nickname = config.get('IRC', 'nickname')
         self.nickserv_password = config.get('IRC', 'nickserv_password')  # Read NickServ password from the config file
         self.auto_join_channels = config.get('IRC', 'auto_join_channels').split(',')
+        
+        # Read new SASL-related fields
+        self.sasl_enabled = config.getboolean('IRC', 'sasl_enabled', fallback=False)
+        self.sasl_username = config.get('IRC', 'sasl_username', fallback=None)
+        self.sasl_password = config.get('IRC', 'sasl_password', fallback=None)
         
         # Read server name from config file
         self.server_name = config.get('IRC', 'server_name', fallback=None)
@@ -77,9 +83,17 @@ class AsyncIRCClient:
         self.text_widget.insert(tk.END, f'Sent client registration commands.\r\n')
         await self.send_message(f'NICK {self.nickname}')
         await self.send_message(f'USER {self.nickname} 0 * :{self.nickname}')
+        
+        # Start capability negotiation
+        if self.sasl_enabled:
+            print("[DEBUG] About to send CAP LS 302")  # Debug message
+            await self.send_message('CAP LS 302')
+        else:
+            print("[DEBUG] SASL is not enabled.")  # Debug message
+
         if self.nickserv_password:
             await self.send_message(f'PRIVMSG NickServ :IDENTIFY {self.nickserv_password}')
-
+            
     async def wait_for_welcome(self):
         MAX_RETRIES = 5
         RETRY_DELAY = 5  # seconds
@@ -115,10 +129,23 @@ class AsyncIRCClient:
             while '\r\n' in buffer:
                 line, buffer = buffer.split('\r\n', 1)
                 tokens = irctokens.tokenise(line)
-                self.text_widget.insert(tk.END, f"{line}\r\n")
 
                 match tokens.command:
+                    case "CAP":
+                        await self.handle_cap(tokens)
+
+                    case "AUTHENTICATE":
+                        await self.handle_sasl_auth(tokens)
+
+                    case "903":
+                        await self.handle_sasl_successful()
+                        sasl_authenticated = True
+
+                    case "904":
+                        await self.handle_sasl_failed()
+
                     case "001":
+                        received_001 = True
                         self.text_widget.insert(tk.END, f'Connected to server: {self.server}:{self.port}\r\n')
                         received_001 = True  # Set this to True upon receiving 001
                         self.gui.insert_and_scroll()
@@ -154,6 +181,44 @@ class AsyncIRCClient:
                     await self.join_channel(channel)
                     await asyncio.sleep(1)
                 return  # Successfully connected and received 001
+
+    async def handle_cap(self, tokens):
+        print(f"[DEBUG] Handling CAP: {tokens.params}")
+        if not self.sasl_enabled:
+            print(f"[DEBUG] SASL is not enabled.")
+            return  # Skip SASL if it's not enabled
+        if "LS" in tokens.params:
+            print(f"[DEBUG] Sending CAP REQ :sasl")
+            await self.send_message("CAP REQ :sasl")
+        elif "ACK" in tokens.params:
+            print(f"[DEBUG] Sending AUTHENTICATE PLAIN")
+            await self.send_message("AUTHENTICATE PLAIN")
+
+    async def handle_sasl_auth(self, tokens):
+        print(f"[DEBUG] Handling AUTHENTICATE: {tokens.params}")
+        if not self.sasl_enabled:
+            print(f"[DEBUG] SASL is not enabled.")
+            return  # Skip SASL if it's not enabled
+        if tokens.params[0] == '+':
+            auth_string = f"{self.sasl_username}\0{self.sasl_username}\0{self.sasl_password}"
+            encoded_auth_string = base64.b64encode(auth_string.encode()).decode()
+            print(f"[DEBUG] Sending AUTHENTICATE {encoded_auth_string[:5]}...")  # Truncate to not reveal sensitive info
+            await self.send_message(f"AUTHENTICATE {encoded_auth_string}")
+
+    async def handle_sasl_successful(self):
+        print(f"[DEBUG] SASL authentication successful.")
+        if not self.sasl_enabled:
+            print(f"[DEBUG] SASL is not enabled.")
+            return  # Skip SASL if it's not enabled
+        self.text_widget.insert(tk.END, f"SASL authentication successful.\r\n")
+        await self.send_message("CAP END")
+
+    async def handle_sasl_failed(self):
+        print(f"[DEBUG] SASL authentication failed.")
+        if not self.sasl_enabled:
+            print(f"[DEBUG] SASL is not enabled.")
+            return  # Skip SASL if it's not enabled
+        self.text_widget.insert(tk.END, f"SASL authentication failed. Disconnecting.\r\n")
 
     async def send_message(self, message):
         self.writer.write(f'{message}\r\n'.encode('UTF-8'))
@@ -347,8 +412,7 @@ class AsyncIRCClient:
             # Update the user listbox for the channel
             self.update_user_listbox(channel)
         else:
-            # Handle the case where the user is not in the list
-            self.text_widget.insert(tk.END, f"{user_info} was not in the user list for channel {channel}\r\n")
+            pass
 
     async def handle_quit(self, tokens):
         user_info = tokens.hostmask.nickname  # No stripping needed here
@@ -370,7 +434,7 @@ class AsyncIRCClient:
                 # Update the user listbox for the channel
                 self.update_user_listbox(channel)
             else:
-                self.text_widget.insert(tk.END, f"{user_info} was not in the user list for channel {channel}\r\n")
+                pass
 
     async def handle_nick(self, tokens):
         old_nick = tokens.hostmask.nickname  # No stripping here, we will handle it in the loop
