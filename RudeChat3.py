@@ -5,7 +5,9 @@ import configparser
 import datetime
 import irctokens
 import time
+import textwrap
 import random
+import datetime
 import logging
 import os
 import re
@@ -30,6 +32,7 @@ class AsyncIRCClient:
         self.user_modes = {}
         self.mode_to_symbol = {}
         self.whois_data = {}
+        self.download_channel_list = {}
         self.whois_executed = set()
         self.decoder = irctokens.StatefulDecoder()
         self.encoder = irctokens.StatefulEncoder()
@@ -649,7 +652,7 @@ class AsyncIRCClient:
                 modes, symbols = mappings[1:].split(")")
                 self.mode_to_symbol = dict(zip(modes, symbols))
 
-    def handle_who_reply(self, tokens):
+    async def handle_who_reply(self, tokens):
         """
         Handle the WHO reply from the server.
         """
@@ -683,7 +686,7 @@ class AsyncIRCClient:
             # Reset the who_details for future use
             self.who_details = []
 
-    def handle_whois_replies(self, command, tokens):
+    async def handle_whois_replies(self, command, tokens):
             nickname = tokens.params[1]
 
             if command == "311":
@@ -744,9 +747,9 @@ class AsyncIRCClient:
 
                     self.text_widget.insert(tk.END, whois_response)
                     self.gui.insert_and_scroll()
-                    self.save_whois_to_file(nickname)
+                    await self.save_whois_to_file(nickname)
 
-    def save_whois_to_file(self, nickname):
+    async def save_whois_to_file(self, nickname):
         """Save WHOIS data for a given nickname to a file."""
         if getattr(sys, 'frozen', False):
             script_directory = os.path.dirname(sys.executable)
@@ -770,19 +773,103 @@ class AsyncIRCClient:
             ignore_suggestion = f"*!{self.whois_data[nickname]['Username']}@{self.whois_data[nickname]['Hostname']}"
             file.write(f"\nSuggested /ignore mask: {ignore_suggestion}\n")
 
+    async def handle_time_request(self, tokens):
+        """
+        Handle the server's response for the TIME command.
+        """
+        server_name = tokens.params[0]  # The server's name
+        local_time = tokens.params[1]   # The local time on the server
+
+        # Display the information in your client's GUI
+        message = f"Server Time from {server_name}: {local_time}"
+        self.text_widget.insert(tk.END, message)
+
+    async def handle_kick_event(self, tokens):
+        """
+        Handle the KICK event from the server.
+        """
+        channel = tokens.params[0]
+        kicked_nickname = tokens.params[1]
+        reason = tokens.params[2] if len(tokens.params) > 2 else 'No reason provided'
+
+        # Display the kick message in the chat window
+        kick_message_content = f"{kicked_nickname} has been kicked from {channel} by {tokens.hostmask.nickname} ({reason})"
+        self.text_widget.insert(tk.END, kick_message_content + "\r\n")
+
+        # Remove the user from the channel_users list for the channel
+        user_found = False
+        for user_with_symbol in self.channel_users.get(channel, []):
+            # Check if the stripped user matches kicked_nickname
+            if user_with_symbol.lstrip('@+%') == kicked_nickname:
+                user_found = True
+                self.channel_users[channel].remove(user_with_symbol)
+                break
+
+        if user_found:
+            # Update the user listbox for the channel
+            self.update_user_listbox(channel)
+
+    async def handle_list_response(self, tokens):
+        channel_name = tokens.params[1]
+        user_count = tokens.params[2]
+        topic = tokens.params[3]
+        # Add the channel information to a dictionary or list (to be implemented)
+        self.download_channel_list[channel_name] = {
+            'user_count': user_count,
+            'topic': topic
+        }
+
+    def show_channel_list_window(self):
+        self.channel_window = ChannelListWindow(self, self.master)
+
+    async def save_channel_list_to_file(self):
+        with open("channel_list.txt", "w", encoding='utf-8') as f:
+            for channel, info in self.channel_list.items():
+                f.write(f"{channel} - Users: {info['user_count']} - Topic: {info['topic']}\n")
+
+    async def handle_names_list(self, tokens):
+        self.current_channel = tokens.params[2]
+        users = tokens.params[3].split(" ")
+
+        # If this channel isn't in channel_users, initialize it with an empty list
+        if self.current_channel not in self.channel_users:
+            self.channel_users[self.current_channel] = []
+
+        # Append the users to the channel's list only if they are not already in it
+        for user in users:
+            if user not in self.channel_users[self.current_channel]:
+                self.channel_users[self.current_channel].append(user)
+
+    async def handle_end_of_names_list(self):
+        if self.current_channel:
+            # Sort the entire list of users for the channel
+            sorted_users = self.sort_users(self.channel_users[self.current_channel], self.current_channel)
+            self.channel_users[self.current_channel] = sorted_users
+            self.update_user_listbox(self.current_channel)  # Pass current_channel here
+            self.current_channel = ""
+
     async def handle_incoming_message(self):
         buffer = ""
         current_users_list = []
         current_channel = ""
+        timeout_seconds = 256  # Adjust this value based on requirements
+        #
         while True:
             try:
-                data = await self.reader.read(4096)
-            except OSError as xe:
-                if xe.errno == 121:  # The semaphore timeout period has expired
-                    self.text_widget.insert(tk.END, f"WinError: {xe}") 
-                    continue  # Attempt to read again
+                data = await asyncio.wait_for(self.reader.read(4096), timeout_seconds)
+            except asyncio.TimeoutError:
+                self.text_widget.insert(tk.END, "Read operation timed out!\n")
+                continue
+            except OSError as e:
+                if e.winerror == 121:  # Check if the WinError code is 121
+                    self.text_widget.insert(tk.END, f"WinError: {e}\n")
+                    continue
                 else:
-                    raise
+                    self.text_widget.insert(tk.END, f"Unhandled OSError: {e}\n")
+                    continue
+            except Exception as e:  # General exception catch
+                self.text_widget.insert(tk.END, f"An unexpected error occurred: {e}\n")
+                continue
 
             if not data:
                 break
@@ -815,26 +902,14 @@ class AsyncIRCClient:
                     continue
 
                 match tokens.command:
+                    case "ERROR":
+                        error_message = ' '.join(tokens.params) if tokens.params else 'Unknown error'
+                        self.text_widget.insert(tk.END, f"ERROR: {error_message}\r\n")
                     case "353":  # NAMES list
-                        current_channel = tokens.params[2]
-                        users = tokens.params[3].split(" ")
-                        
-                        # If this channel isn't in channel_users, initialize it with an empty list
-                        if current_channel not in self.channel_users:
-                            self.channel_users[current_channel] = []
-                            
-                        # Append the users to the channel's list only if they are not already in it
-                        for user in users:
-                            if user not in self.channel_users[current_channel]:
-                                self.channel_users[current_channel].append(user)
+                        await self.handle_names_list(tokens)
                                 
                     case "366":  # End of NAMES list
-                        if current_channel:
-                            # Sort the entire list of users for the channel
-                            sorted_users = self.sort_users(self.channel_users[current_channel], current_channel)
-                            self.channel_users[current_channel] = sorted_users
-                            self.update_user_listbox(current_channel)  # Pass current_channel here
-                            current_channel = ""
+                        await self.handle_end_of_names_list()
 
                     case "372":  # Individual line of MOTD
                         motd_line = tokens.params[-1]  # Assumes the MOTD line is the last parameter
@@ -860,12 +935,30 @@ class AsyncIRCClient:
                         self.server_text_widget.insert(tk.END, f"Your host is now hidden as: {hidden_host}. Reason: {reason}\r\n")
                         self.gui.insert_and_scroll()
 
+                    case "391":
+                        await self.handle_time_request(tokens)
+
                     case "352" | "315":
-                        self.handle_who_reply(tokens)
+                        await self.handle_who_reply(tokens)
 
                     case "311" | "312" | "313" | "317" | "319" | "301" | "671" | "338" | "318" | "330":
-                        self.handle_whois_replies(tokens.command, tokens)
+                        await self.handle_whois_replies(tokens.command, tokens)
 
+                    case "367":  
+                        await self.handle_banlist(tokens)
+                            
+                    case "368":  
+                        await self.handle_endofbanlist(tokens)
+
+                    case "322":  # Channel list
+                        await self.handle_list_response(tokens)
+                        await self.channel_window.update_channel_info(tokens.params[1], tokens.params[2], tokens.params[3])
+                    case "323":  # End of channel list
+                        await self.save_channel_list_to_file()
+                        await self.channel_window.stop_progress_bar()
+
+                    case "KICK":
+                        await self.handle_kick_event(tokens)
                     case "NOTICE":
                         await self.handle_notice_message(tokens)
                     case "PRIVMSG":
@@ -975,6 +1068,97 @@ class AsyncIRCClient:
                 channel_name = args[1]
                 await self.join_channel(channel_name)
 
+            case "query":  # open a DM with a user
+                if len(args) < 2:
+                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a nickname for the query command.\r\n")
+                    return
+
+                nickname = args[1]
+                if nickname not in self.joined_channels:
+                    # Add the DM to the channel list
+                    self.joined_channels.append(nickname)
+                    self.gui.channel_lists[self.server] = self.joined_channels
+                    self.update_gui_channel_list()
+                    self.text_widget.insert(tk.END, f"{timestamp}Opened DM with {nickname}.\r\n")
+                else:
+                    self.text_widget.insert(tk.END, f"{timestamp}You already have a DM open with {nickname}.\r\n")
+
+            case "cq":  # close a private message (query) with a user
+                if len(args) < 2:
+                    # Display an error message if not enough arguments are provided
+                    self.update_message_text(f"{timestamp}Usage: /cq <nickname>\r\n")
+                else:
+                    nickname = args[1]
+
+                    # Check if the DM exists in the list of open channels
+                    if nickname in self.joined_channels:
+                        # Remove the DM from the list of joined channels
+                        self.joined_channels.remove(nickname)
+
+                        # Remove the DM's messages from the channel_messages dictionary
+                        if self.server in self.channel_messages and nickname in self.channel_messages[self.server]:
+                            del self.channel_messages[self.server][nickname]
+
+                        # Update the GUI's list of channels
+                        self.update_gui_channel_list()
+
+                        # Display a message indicating the DM was closed
+                        self.text_widget.insert(tk.END, f"Private message with {nickname} closed.\r\n")
+                    else:
+                        self.text_widget.insert(tk.END, f"No open private message with {nickname}.\r\n")
+
+            case "quote":  # sends raw IRC message to the server
+                if len(args) < 2:
+                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a raw IRC command after /quote.\r\n")
+                    return
+
+                raw_command = " ".join(args[1:])
+                await self.send_message(raw_command)
+                self.text_widget.insert(tk.END, f"{timestamp}Sent raw command: {raw_command}\r\n")
+
+            case "away":  # set the user as away
+                away_message = " ".join(args[1:]) if len(args) > 1 else None
+                if away_message:
+                    await self.send_message(f"AWAY :{away_message}")
+                    self.text_widget.insert(tk.END, f"{timestamp}You are now set as away: {away_message}\r\n")
+                else:
+                    await self.send_message("AWAY")
+                    self.text_widget.insert(tk.END, f"{timestamp}You are now set as away.\r\n")
+
+            case "back":  # remove the "away" status
+                await self.send_message("AWAY")
+                self.text_widget.insert(tk.END, f"{timestamp}You are now back and no longer set as away.\r\n")
+
+            case "msg":  # send a private message to a user
+                if len(args) < 3:
+                    # Display an error message if not enough arguments are provided
+                    self.update_message_text(f"{timestamp}Usage: /msg <nickname> <message>\r\n")
+                else:
+                    nickname = args[1]
+                    message = " ".join(args[2:])
+                    await self.send_message(f"PRIVMSG {nickname} :{message}")
+                    self.text_widget.insert(tk.END, f'<{self.nickname} -> {nickname}> {message}\r\n')
+
+            case "CTCP":
+                if len(args) < 3:
+                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a nickname and CTCP command.\r\n")
+                    return
+                target_nick = args[1]
+                ctcp_command = args[2]
+                await self.send_ctcp_request(target_nick, ctcp_command)
+
+            case "mode":
+                if len(args) < 2:
+                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a mode.\r\n")
+                    return
+                mode = args[1]
+                # Check if a channel is provided, if not use the current channel
+                channel = args[2] if len(args) > 2 else self.current_channel
+                if not channel:
+                    self.text_widget.insert(tk.END, f"{timestamp}Error: No channel selected or provided.\r\n")
+                    return
+                await self.set_mode(channel, mode)
+
             case "who":
                 await self.handle_who_command(args[1:])
 
@@ -986,11 +1170,19 @@ class AsyncIRCClient:
                 channel_name = args[1]
                 await self.leave_channel(channel_name)
 
+            case "time":
+                await self.send_message(f"TIME")
+
             case "me":
                 if self.current_channel:
                     await self.handle_action(args)
                 else:
                     self.text_widget.insert(tk.END, "No channel selected. Use /join to join a channel.\r\n")
+
+            case "list":
+                await self.send_message("LIST")
+                # Create the channel list window
+                self.show_channel_list_window()
 
             case "ch":
                 for channel in self.joined_channels:
@@ -1006,6 +1198,34 @@ class AsyncIRCClient:
                 else:
                     self.text_widget.insert(tk.END, f"Not a member of channel {channel_name}\r\n")
 
+            case "topic":
+                await self.request_topic_for_current_channel()
+
+            case "names":
+                await self.refresh_user_list_for_current_channel()
+
+            case "banlist":
+                channel = args[1] if len(args) > 1 else self.current_channel
+                if channel:
+                    await self.send_message(f"MODE {channel} +b")
+
+            case "nick":
+                if len(args) < 2:
+                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a new nickname.\r\n")
+                    return
+                new_nick = args[1]
+                await self.change_nickname(new_nick)
+
+            case "ping":
+                await self.ping_server()
+
+            case "sa":
+                if len(args) < 2:
+                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a message to send to all channels.\r\n")
+                    return
+                message = " ".join(args[1:])
+                await self.send_message_to_all_channels(message)
+
             case "quit":
                 await self.send_message('QUIT')
                 await asyncio.sleep(2)
@@ -1014,6 +1234,12 @@ class AsyncIRCClient:
 
             case "help":
                 self.display_help()
+
+            case "fortune":
+                file_name_arg = args[1] if len(args) > 1 else None
+                await self.fortune(file_name_arg)
+            case "cowsay":
+                await self.handle_cowsay_command(args)
 
             case None:
                 if self.current_channel:
@@ -1041,6 +1267,219 @@ class AsyncIRCClient:
                 self.text_widget.insert(tk.END, "Invalid command. Type /help for a list of commands.\r\n")
 
         return True
+
+    async def handle_banlist(self, tokens):
+        """
+        Handle the RPL_BANLIST reply, which provides info about each ban mask.
+        """
+        channel = tokens.params[1]
+        banmask = tokens.params[2]
+        setter = tokens.params[3]
+        timestamp = tokens.params[4]
+        
+        # Construct the ban information message
+        ban_info = f"Channel: {channel}, Banmask: {banmask}, Set by: {setter}, Timestamp: {timestamp}\r\n"
+        
+        # Update the GUI's message text with this ban information
+        self.text_widget.insert(tk.END, ban_info)  # Add this line
+
+    async def handle_endofbanlist(self, tokens):
+        """
+        Handle the RPL_ENDOFBANLIST reply, signaling the end of the ban list.
+        """
+        channel = tokens.params[1]
+        
+        # Notify the user that the ban list has ended
+        end_message = f"End of ban list for channel: {channel}\r\n"
+        self.text_widget.insert(tk.END, end_message)  # Add this line
+
+    async def append_to_channel_history(self, channel, message, is_action=False):
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
+        formatted_message = f"{timestamp}<{self.nickname}> {message}\r\n"
+
+        # Initialize the channel's history if it does not exist yet
+        if channel not in self.channel_messages:
+            self.channel_messages[channel] = []
+        
+        # Append the message to the channel's history
+        self.channel_messages[channel].append(formatted_message)
+        
+        # Trim the history if it exceeds 200 lines
+        if len(self.channel_messages[channel]) > 200:
+            self.channel_messages[channel] = self.channel_messages[channel][-200:]
+
+    async def handle_cowsay_command(self, args):
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+
+        if len(args) > 1:
+            file_name_arg = args[1]
+            # Construct the potential file path using the absolute path
+            potential_path = os.path.join(script_directory, "Fortune Lists", f"{file_name_arg}.txt")
+
+            # Check if the provided argument corresponds to a valid fortune file
+            if os.path.exists(potential_path):
+                await self.fortune_cowsay(file_name_arg)
+            else:
+                # If not a valid file name, consider the rest of the arguments as a custom message
+                custom_message = ' '.join(args[1:])
+                await self.cowsay_custom_message(custom_message)
+        else:
+            await self.fortune_cowsay()
+
+    def cowsay(self, message):
+        """Formats the given message in a 'cowsay' format."""
+
+        # Find the longest line in the input message to determine the maximum width.
+        max_line_length = max(len(line) for line in message.split('\n'))
+        # Adjust for the added spaces and border characters
+        adjusted_width = max_line_length - 4  # 2 for initial and end space + 2 for border characters
+
+        # Manually split lines to check for one-word lines.
+        raw_lines = message.split('\n')
+        wrapped_lines = []
+        for line in raw_lines:
+            if len(line.split()) == 1:  # Single word line
+                wrapped_lines.append(line)
+            else:
+                wrapped_lines.extend(textwrap.wrap(line, adjusted_width))
+
+        # Format lines using cowsay style.
+        if len(wrapped_lines) == 1:
+            # Special case: single line message.
+            combined_message = f"/ {wrapped_lines[0].ljust(adjusted_width)} \\"
+        else:
+            lines = [f"/ {wrapped_lines[0].ljust(adjusted_width)} \\"]
+            for line in wrapped_lines[1:-1]:
+                lines.append(f"| {line.ljust(adjusted_width)} |")
+            lines.append(f"\\ {wrapped_lines[-1].ljust(adjusted_width)} /")
+            combined_message = '\n'.join(lines)
+
+        # Find the longest line again (after formatting) to adjust the borders accordingly.
+        max_line_length = max(len(line) for line in combined_message.split('\n'))
+
+        top_border = ' ' + '_' * (max_line_length - 2)
+        
+        # Set the bottom border to match the max line length
+        bottom_border = ' ' + '-' * (max_line_length - 2)
+
+        cow = """
+       \\   ^__^
+        \\  (oo)\\_______
+           (__)\\       )\\/\\
+               ||----w |
+               ||     ||"""
+
+        return f"{top_border}\n{combined_message}\n{bottom_border}{cow}"
+
+    def wrap_text(self, text, width=100):
+        """Dont spam that channel"""
+        return textwrap.fill(text, width)
+
+    def get_fortune_file(self, file_name=None):
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        fortune_directory = os.path.join(script_directory, "Fortune Lists")
+        
+        if file_name:
+            return os.path.join(fortune_directory, file_name + ".txt")
+        
+        fortune_files = [os.path.join(fortune_directory, f) for f in os.listdir(fortune_directory) if f.endswith('.txt')]
+        return random.choice(fortune_files)
+
+    async def fortune_cowsay(self, file_name=None):
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
+        file_name = self.get_fortune_file(file_name)
+
+        with open(file_name, 'r', encoding='utf-8') as f:
+            fortunes = f.read().strip().split('%')
+            chosen_fortune = random.choice(fortunes).strip()
+
+        wrapped_fortune_text = self.wrap_text(chosen_fortune)
+        cowsay_fortune = self.cowsay(wrapped_fortune_text)
+
+        for line in cowsay_fortune.split('\n'):
+            formatted_message = f"{timestamp}<{self.nickname}> {line}\r\n"
+            await self.send_message(f'PRIVMSG {self.current_channel} :{line}')
+            self.text_widget.insert(tk.END, formatted_message)
+            self.gui.highlight_nickname()
+            await asyncio.sleep(0.4)
+            await self.append_to_channel_history(self.current_channel, line)
+
+    async def cowsay_custom_message(self, message):
+        """Wrap a custom message using the cowsay format."""
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
+        wrapped_message = self.wrap_text(message)
+        cowsay_output = self.cowsay(wrapped_message)
+        
+        for line in cowsay_output.split('\n'):
+            formatted_message = f"{timestamp}<{self.nickname}> {line}\r\n"
+            await self.send_message(f'PRIVMSG {self.current_channel} :{line}')
+            self.text_widget.insert(tk.END, formatted_message)
+            self.gui.highlight_nickname()
+            await asyncio.sleep(0.4)
+            await self.append_to_channel_history(self.current_channel, line)
+
+    async def fortune(self, file_name=None):
+        """Choose a random fortune from one of the lists"""
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
+        file_name = self.get_fortune_file(file_name)
+
+        with open(file_name, 'r', encoding='utf-8') as f:  # Notice the encoding parameter
+            fortunes = f.read().strip().split('%')
+            chosen_fortune = random.choice(fortunes).strip()
+
+        for line in chosen_fortune.split('\n'):
+            formatted_message = f"{timestamp}<{self.nickname}> {line}\r\n"
+            await self.send_message(f'PRIVMSG {self.current_channel} :{line}')
+            self.text_widget.insert(tk.END, formatted_message)
+            self.gui.highlight_nickname()
+            await asyncio.sleep(0.4)
+            await self.append_to_channel_history(self.current_channel, line)
+
+    async def send_ctcp_request(self, target_nick, ctcp_command):
+        """Sends a CTCP request to a target."""
+        ctcp_message = f"\x01{ctcp_command.upper()}\x01"
+        await self.send_message(f'PRIVMSG {target_nick} :{ctcp_message}')
+
+    async def set_mode(self, channel, mode):
+        """Sets the mode for the current user in a specified channel."""
+        await self.send_message(f'MODE {channel} {mode}')
+
+    async def request_topic_for_current_channel(self):
+        if self.current_channel:
+            await self.send_message(f'TOPIC {self.current_channel}')
+        else:
+            self.text_widget.insert(tk.END, "No channel selected. Use /join to join a channel.\r\n")
+
+    async def refresh_user_list_for_current_channel(self):
+        if self.current_channel:
+            await self.send_message(f'NAMES {self.current_channel}')
+        else:
+            self.text_widget.insert(tk.END, "No channel selected. Use /join to join a channel.\r\n")
+
+    async def change_nickname(self, new_nick):
+        await self.send_message(f'NICK {new_nick}')
+        self.nickname = new_nick  # update local state
+        self.gui.update_nick_channel_label()  # assuming there's a method to update GUI
+
+    async def ping_server(self):
+        await self.send_message(f'PING {self.server}')
+
+    async def send_message_to_all_channels(self, message):
+        timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
+        formatted_message = f"{timestamp}<{self.nickname}> {message}\r\n"
+        
+        for channel in self.joined_channels:
+            await self.send_message(f'PRIVMSG {channel} :{message}')
+            
+            # Save the message to the channel_messages dictionary
+            if channel not in self.channel_messages:
+                self.channel_messages[channel] = []
+            self.channel_messages[channel].append(formatted_message)
+            
+            # Trim the messages list if it exceeds 200 lines
+            if len(self.channel_messages[channel]) > 200:
+                self.channel_messages[channel] = self.channel_messages[channel][-200:]
+        self.text_widget.insert(tk.END, f"Message: {message} sent to all channels")
 
     async def handle_who_command(self, args):
         """
@@ -1083,12 +1522,51 @@ class AsyncIRCClient:
             self.channel_messages[self.current_channel] = self.channel_messages[self.current_channel][-200:]
 
     def display_help(self):
-        self.text_widget.insert(tk.END, "/join <channel> joins a channel\r\n")
-        self.text_widget.insert(tk.END, "/part <channel> leaves a channel\r\n")
-        self.text_widget.insert(tk.END, "/ch shows channels joined\r\n")
-        self.text_widget.insert(tk.END, "/sw <channel> switches to a channel\r\n")
-        self.text_widget.insert(tk.END, "/quit closes connection and client\r\n")
-        self.text_widget.insert(tk.END, "/help redisplays this message\r\n")
+        # Categories and their associated commands
+        categories = {
+            "Channel Management": [
+                "/join <channel> - Joins a channel",
+                "/part <channel> - Leaves a channel",
+                "/ch - Shows channels joined",
+                "/sw <channel> - Switches to a channel",
+                "/topic - Requests the topic for the current channel",
+                "/names - Refreshes the user list for the current channel",
+            ],
+            "Private Messaging": [
+                "/query <nickname> - Opens a DM with a user",
+                "/cq <nickname> - Closes a DM with a user",
+                "/msg <nickname> <message> - Sends a private message to a user",
+            ],
+            "User Commands": [
+                "/nick <new nickname> - Changes the user's nickname",
+                "/away [message] - Sets the user as away",
+                "/back - Removes the 'away' status",
+                "/who <mask> - Lists users matching a mask",
+                "/whois <nickname> - Shows information about a user",
+                "/me <action text> - Sends an action to the current channel",
+            ],
+            "Server Interaction": [
+                "/ping - Pings the currently selected server",
+                "/quote <IRC command> - Sends raw IRC message to the server",
+                "/CTCP <nickname> <command> - Sends a CTCP request",
+                "/mode <mode> [channel] - Sets mode for user (optionally in a specific channel)",
+            ],
+            "Broadcasting": [
+                "/sa <message> - Sends a message to all channels",
+            ],
+            "Help and Exiting": [
+                "/quit - Closes connection and client",
+                "/help - Redisplays this message",
+            ],
+        }
+
+        # Display the categorized commands
+        for category, commands in categories.items():
+            self.text_widget.insert(tk.END, f"\n{category}:\n")
+            self.gui.insert_and_scroll()
+            for cmd in commands:
+                self.text_widget.insert(tk.END, f"{cmd}\r\n")
+                self.gui.insert_and_scroll()
 
     def set_gui(self, gui):
         self.gui = gui
@@ -1437,6 +1915,88 @@ class IRCGui:
         current_text = self.entry_widget.get()
         self.entry_widget.delete(0, tk.END)
         self.entry_widget.insert(0, current_text + ": ")
+
+
+class ChannelListWindow(tk.Toplevel):
+    def __init__(self, client, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.title("Channel List")
+        self.geometry("790x400")
+        
+        self.client = client  # The AsyncIRCClient instance
+        self.total_channels = 0  # Initialize the total_channels variable
+        self.is_destroyed = False  # To check if the window has been destroyed
+        
+        self.create_widgets()
+        
+        # Start populating the channel list
+        asyncio.create_task(self.populate_channel_list())
+        
+    def create_widgets(self):
+        self.tree = ttk.Treeview(self, columns=("Channel", "Users", "Topic"), show='headings')
+        self.tree.heading("Channel", text="Channel")
+        self.tree.heading("Users", text="Users")
+        self.tree.heading("Topic", text="Topic")
+        
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self.scrollbar.set)
+        self.scrollbar.grid(row=0, column=1, sticky="ns")
+        
+        self.close_button = ttk.Button(self, text="Close", command=self.destroy)
+        self.close_button.grid(row=1, column=0, columnspan=2, pady=10, padx=10, sticky="ew")
+        
+        self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate")
+        self.progress_bar.grid(row=2, column=0, columnspan=2, pady=10, padx=10, sticky="ew")
+        
+        # Make the Treeview and scrollbar resizable
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        
+    async def populate_channel_list(self):
+        processed_channels = 0
+        processed_channel_names = set()  # To keep track of channels already processed
+        
+        while True:
+            if self.is_destroyed:
+                break  # Stop populating if the window is destroyed
+
+            new_total_channels = len(self.client.download_channel_list)
+
+            # Update the total channel count if it has changed
+            if new_total_channels != self.total_channels:
+                self.total_channels = new_total_channels
+
+            # Populate the list with new channels
+            for channel, info in self.client.download_channel_list.items():
+                if channel not in processed_channel_names:
+                    # Insert the new channel into the Treeview
+                    self.tree.insert("", tk.END, values=(channel, info['user_count'], info['topic']))
+
+                    # Mark this channel as processed and increment the counter
+                    processed_channel_names.add(channel)
+                    processed_channels += 1
+
+                    # Update the progress bar
+                    if self.total_channels != 0:
+                        progress = (processed_channels / self.total_channels) * 100
+                        self.progress_bar["value"] = progress
+
+            await asyncio.sleep(0.1)  # Allow time for more channels to be added
+
+        await self.stop_progress_bar()
+
+    async def update_channel_info(self, channel_name, user_count, topic):
+        self.tree.insert("", tk.END, values=(channel_name, user_count, topic))
+
+    async def stop_progress_bar(self):
+        self.progress_bar.stop()
+        
+    def destroy(self):
+        self.is_destroyed = True
+        super().destroy()
+
 
 def main():
     root = tk.Tk()
