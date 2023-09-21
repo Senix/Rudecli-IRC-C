@@ -4,9 +4,14 @@ import ssl
 import configparser
 import datetime
 import irctokens
+import time
 import random
+import logging
 import os
+import re
+import sys
 import tkinter as tk
+from plyer import notification
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
@@ -24,6 +29,8 @@ class AsyncIRCClient:
         self.channel_users = {}
         self.user_modes = {}
         self.mode_to_symbol = {}
+        self.whois_data = {}
+        self.whois_executed = set()
         self.decoder = irctokens.StatefulDecoder()
         self.encoder = irctokens.StatefulEncoder()
         self.gui = gui
@@ -152,6 +159,14 @@ class AsyncIRCClient:
                     case "005":  # Handling the ISUPPORT message
                         await self.handle_isupport(tokens)
                         self.gui.insert_and_scroll()
+                    case "250":
+                        connection_info = tokens.params[-1]  # Assumes the connection info is the last parameter
+                        self.text_widget.insert(tk.END, f"Server Info: {connection_info}\r\n")
+                        self.gui.insert_and_scroll()
+                    case "266":
+                        global_users_info = tokens.params[-1]  # Assumes the global users info is the last parameter
+                        self.text_widget.insert(tk.END, f"Server Users Info: {global_users_info}\r\n")
+                        self.gui.insert_and_scroll()
                     case "433":  # Nickname already in use
                         new_nickname = self.nickname + str(random.randint(1, 99))
                         await self.send_message(f'NICK {new_nickname}')
@@ -160,6 +175,10 @@ class AsyncIRCClient:
                     case "372":  # Individual line of MOTD
                         motd_line = tokens.params[-1]  # Assumes the MOTD line is the last parameter
                         self.motd_lines.append(motd_line)
+                    case "375":  # Start of MOTD
+                        self.motd_lines.clear()
+                        motd_start_line = tokens.params[-1]  # Assumes the introductory line is the last parameter
+                        self.motd_lines.append(motd_start_line)
                     case "376":  # End of MOTD
                         # Combine the individual MOTD lines into a single string
                         full_motd = "\n".join(self.motd_lines)
@@ -250,16 +269,19 @@ class AsyncIRCClient:
 
     async def reconnect(self):
         self.text_widget.insert(tk.END, f'Connection lost. Attempting to reconnect...\r\n')
+        self.gui.insert_and_scroll()
         MAX_RETRIES = 5
         retries = 0
         while retries < MAX_RETRIES:
             try:
                 await self.connect()
                 self.text_widget.insert(tk.END, f'Successfully reconnected.\r\n')
+                self.gui.insert_and_scroll()
                 return True  # Successfully reconnected
             except Exception as e:
                 retries += 1
                 self.text_widget.insert(tk.END, f'Failed to reconnect ({retries}/{MAX_RETRIES}): {e}. Retrying in {RETRY_DELAY} seconds.\r\n')
+                self.gui.insert_and_scroll()
                 await asyncio.sleep(RETRY_DELAY)
         return False  # Failed to reconnect after MAX_RETRIES
 
@@ -305,7 +327,7 @@ class AsyncIRCClient:
                         current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         await self.send_message(f'NOTICE {sender} :\x01TIME {current_time}\x01')
                 case "ACTION":
-                    action_message = f"{timestamp}* {sender} {ctcp_content}"
+                    action_message = f"{timestamp}* {sender} {ctcp_content}\r\n"
                     self.text_widget.insert(tk.END, action_message)
                     self.gui.highlight_nickname()
                 case _:
@@ -313,7 +335,7 @@ class AsyncIRCClient:
 
     def notify_user_of_mention(self, server, channel):
         notification_msg = f"Mention on {server} in {channel}"
-        self.text_widget.insert(tk.END, f"\n{notification_msg}\n")
+        self.server_text_widget.insert(tk.END, f"\n{notification_msg}\n")
         self.gui.insert_and_scroll()
 
         # Highlight the mentioned channel in the Listbox
@@ -321,6 +343,44 @@ class AsyncIRCClient:
             if self.gui.channel_listbox.get(idx) == channel:
                 self.gui.channel_listbox.itemconfig(idx, {'bg':'red'})
                 break
+        
+        # Play the beep sound/notification
+        self.trigger_beep_notification(channel_name=channel, message_content=notification_msg)
+
+    def trigger_beep_notification(self, channel_name=None, message_content=None):
+        """
+        You've been pinged! Plays a beep or noise on mention.
+        """
+        
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
+        if sys.platform.startswith("linux"):
+            # Linux-specific notification sound using paplay
+            sound_path = os.path.join(script_directory, "Sounds", "Notification4.wav")
+            os.system(f"paplay {sound_path}")
+        elif sys.platform == "darwin":
+            # macOS-specific notification sound using afplay
+            os.system("afplay /System/Library/Sounds/Ping.aiff")
+        elif sys.platform == "win32":
+            # Windows-specific notification using winsound
+            import winsound
+            duration = 75  # milliseconds
+            frequency = 1200  # Hz
+            winsound.Beep(frequency, duration)
+        else:
+            # For other platforms, print a message
+            print("Beep notification not supported on this platform.")
+
+        try:
+            self.gui.trigger_desktop_notification(channel_name, message_content=message_content)
+        except Exception as e:
+            print(f"Error triggering desktop notification: {e}")
 
     async def handle_privmsg(self, tokens):
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
@@ -341,22 +401,45 @@ class AsyncIRCClient:
         if target == self.nickname:
             target = sender  # Consider the sender as the "channel" for DMs
 
-        # Check if the "channel" (could be an actual channel or a DM) exists in the dictionary
-        if target not in self.channel_messages:
-            self.channel_messages[target] = []
+            # Check if we have executed WHOIS for this sender before
+            if sender not in self.whois_executed:
+                await self.send_message(f'WHOIS {sender}')
+                self.whois_executed.add(sender)
 
-            # If it's a DM and not in the joined_channels list, add it
-            if target == sender and target not in self.joined_channels:
-                self.joined_channels.append(target)
-                self.gui.channel_lists[self.server] = self.joined_channels
-                self.update_gui_channel_list()
+            # Check if the server exists in the dictionary
+            if self.server not in self.channel_messages:
+                self.channel_messages[self.server] = {}
 
-        # Now it's safe to append the message
-        self.channel_messages[target].append(f"{timestamp}<{sender}> {message}\r\n")
+            # Check if the DM exists in the server's dictionary
+            if target not in self.channel_messages[self.server]:
+                self.channel_messages[self.server][target] = []
+
+                # If it's a DM and not in the joined_channels list, add it
+                if target == sender and target not in self.joined_channels:
+                    self.joined_channels.append(target)
+                    self.gui.channel_lists[self.server] = self.joined_channels
+                    self.update_gui_channel_list()
+
+            # Now it's safe to append the message
+            self.channel_messages[self.server][target].append(f"{timestamp}<{sender}> {message}\r\n")
+            self.log_message(target, sender, message, is_sent=False)
+
+            # Identify the correct message list for trimming
+            message_list = self.channel_messages[self.server][target]
+        else:
+            # It's a channel message
+            if target not in self.channel_messages:
+                self.channel_messages[target] = []
+            
+            self.channel_messages[target].append(f"{timestamp}<{sender}> {message}\r\n")
+            self.log_message(target, sender, message, is_sent=False)
+
+            # Identify the correct message list for trimming
+            message_list = self.channel_messages[target]
 
         # Trim the messages list if it exceeds 200 lines
-        if len(self.channel_messages[target]) > 200:
-            self.channel_messages[target] = self.channel_messages[target][-200:]
+        if len(message_list) > 200:
+            message_list = message_list[-200:]
 
         # Display the message in the text_widget if the target matches the current channel or DM
         if target == self.current_channel and self.gui.irc_client == self:
@@ -376,6 +459,7 @@ class AsyncIRCClient:
         user_info = tokens.hostmask.nickname
         channel = tokens.params[0]
         self.text_widget.insert(tk.END, f"{user_info} has joined channel {channel}\r\n")
+        self.gui.insert_and_scroll()
 
         # If the user joining is the client's user, just return
         if user_info == self.nickname:
@@ -398,6 +482,7 @@ class AsyncIRCClient:
         user_info = tokens.hostmask.nickname  # No "@" symbol
         channel = tokens.params[0]
         self.text_widget.insert(tk.END, f"{user_info} has parted from channel {channel}\r\n")
+        self.gui.insert_and_scroll()
 
         # Check if the user is in the channel_users list for the channel
         user_found = False
@@ -418,6 +503,7 @@ class AsyncIRCClient:
         user_info = tokens.hostmask.nickname  # No stripping needed here
         reason = tokens.params[0] if tokens.params else "No reason"
         self.text_widget.insert(tk.END, f"{user_info} has quit: {reason}\r\n")
+        self.gui.insert_and_scroll()
 
         # Remove the user from all channel_users lists
         for channel in self.channel_users:
@@ -563,6 +649,127 @@ class AsyncIRCClient:
                 modes, symbols = mappings[1:].split(")")
                 self.mode_to_symbol = dict(zip(modes, symbols))
 
+    def handle_who_reply(self, tokens):
+        """
+        Handle the WHO reply from the server.
+        """
+        if not hasattr(self, 'who_details'):
+            self.who_details = []
+
+        if tokens.command == "352":  # Standard WHO reply
+            # Parse the WHO reply
+            channel = tokens.params[1]
+            username = tokens.params[2]
+            host = tokens.params[3]
+            server = tokens.params[4]
+            nickname = tokens.params[5]
+            user_details = {
+                "nickname": nickname,
+                "username": username,
+                "host": host,
+                "server": server,
+                "channel": channel
+            }
+            self.who_details.append(user_details)
+
+        elif tokens.command == "315":  # End of WHO list
+            messages = []
+            for details in self.who_details:
+                message = f"User {details['nickname']} ({details['username']}@{details['host']}) on {details['server']} in {details['channel']}\r\n"
+                messages.append(message)
+            final_message = "\n".join(messages)
+            self.text_widget.insert(tk.END, final_message)
+            self.gui.insert_and_scroll()
+            # Reset the who_details for future use
+            self.who_details = []
+
+    def handle_whois_replies(self, command, tokens):
+            nickname = tokens.params[1]
+
+            if command == "311":
+                username = tokens.params[2]
+                hostname = tokens.params[3]
+                realname = tokens.params[5]
+                self.whois_data[nickname] = {"Username": username, "Hostname": hostname, "Realname": realname}
+
+            elif command == "312":
+                server_info = tokens.params[2]
+                if self.whois_data.get(nickname):
+                    self.whois_data[nickname]["Server"] = server_info
+
+            elif command == "313":
+                operator_info = tokens.params[2]
+                if self.whois_data.get(nickname):
+                    self.whois_data[nickname]["Operator"] = operator_info
+
+            elif command == "317":
+                idle_time_seconds = int(tokens.params[2])
+                idle_time = str(datetime.timedelta(seconds=idle_time_seconds))
+                if self.whois_data.get(nickname):
+                    self.whois_data[nickname]["Idle Time"] = idle_time
+
+            elif command == "319":
+                channels = tokens.params[2]
+                self.whois_data[nickname]["Channels"] = channels
+
+            elif command == "301":
+                away_message = tokens.params[2]
+                if nickname not in self.whois_data:
+                    self.whois_data[nickname] = {}  
+                self.whois_data[nickname]["Away"] = away_message
+
+            elif command == "671":
+                secure_message = tokens.params[2]
+                self.whois_data[nickname]["Secure Connection"] = secure_message
+
+            elif command == "330":
+                logged_in_as = tokens.params[2]
+                if nickname not in self.whois_data:
+                    self.whois_data[nickname] = {}
+                self.whois_data[nickname]["Logged In As"] = logged_in_as
+
+            elif command == "338":
+                ip_address = tokens.params[2]
+                self.whois_data[nickname]["Actual IP"] = ip_address
+
+            elif command == "318":
+                if self.whois_data.get(nickname):
+                    whois_response = f"WHOIS for {nickname}:\n"
+                    for key, value in self.whois_data[nickname].items():
+                        whois_response += f"{key}: {value}\n"
+
+                    # Generate and append the /ignore suggestion
+                    ignore_suggestion = f"*!{self.whois_data[nickname]['Username']}@{self.whois_data[nickname]['Hostname']}"
+                    whois_response += f"\nSuggested /ignore mask: {ignore_suggestion}\n"
+
+                    self.text_widget.insert(tk.END, whois_response)
+                    self.gui.insert_and_scroll()
+                    self.save_whois_to_file(nickname)
+
+    def save_whois_to_file(self, nickname):
+        """Save WHOIS data for a given nickname to a file."""
+        if getattr(sys, 'frozen', False):
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
+        # Construct the full path for the WHOIS directory
+        whois_directory = os.path.join(script_directory, 'whois')
+        
+        # Create the WHOIS directory if it doesn't exist
+        os.makedirs(whois_directory, exist_ok=True)
+
+        # Construct the full path for the whois file inside the WHOIS directory
+        filename = os.path.join(whois_directory, f'whois_{nickname}.txt')
+        
+        with open(filename, 'w', encoding='utf-8') as file:
+            for key, value in self.whois_data[nickname].items():
+                file.write(f"{key}: {value}\n")
+
+            # Generate and append the /ignore suggestion
+            ignore_suggestion = f"*!{self.whois_data[nickname]['Username']}@{self.whois_data[nickname]['Hostname']}"
+            file.write(f"\nSuggested /ignore mask: {ignore_suggestion}\n")
+
     async def handle_incoming_message(self):
         buffer = ""
         current_users_list = []
@@ -642,6 +849,23 @@ class AsyncIRCClient:
                         # Clear the MOTD buffer for future use
                         self.motd_lines.clear()
 
+                    case "900":  # Successful SASL authentication
+                        logged_in_as = tokens.params[3]
+                        self.server_text_widget.insert(tk.END, f"Successfully authenticated as: {logged_in_as}\r\n")
+                        self.gui.insert_and_scroll()
+
+                    case "396":  # Host hiding
+                        hidden_host = tokens.params[1]
+                        reason = tokens.params[2]
+                        self.server_text_widget.insert(tk.END, f"Your host is now hidden as: {hidden_host}. Reason: {reason}\r\n")
+                        self.gui.insert_and_scroll()
+
+                    case "352" | "315":
+                        self.handle_who_reply(tokens)
+
+                    case "311" | "312" | "313" | "317" | "319" | "301" | "671" | "338" | "318" | "330":
+                        self.handle_whois_replies(tokens.command, tokens)
+
                     case "NOTICE":
                         await self.handle_notice_message(tokens)
                     case "PRIVMSG":
@@ -660,6 +884,19 @@ class AsyncIRCClient:
                         ping_param = tokens.params[0]
                         await self.send_message(f'PONG {ping_param}')
                         print(f"sent PONG: {ping_param}")
+                    case "CAP":
+                        subcommand = tokens.params[1].upper()
+                        if subcommand == "LS":
+                            capabilities = tokens.params[-1]
+                            self.text_widget.insert(tk.END, f"Server capabilities: {capabilities}\r\n")
+                            self.gui.insert_and_scroll()
+                            
+                            # Optional: If you want to enable specific capabilities
+                            # await self.send_message("CAP REQ :some-capability another-capability")
+                        elif subcommand == "ACK":  # If the server acknowledges the capabilities you requested
+                            acknowledged_caps = tokens.params[-1]
+                            self.text_widget.insert(tk.END, f"Enabled capabilities: {acknowledged_caps}\r\n")
+                            self.gui.insert_and_scroll()
                     case "PONG":
                         pong_server = tokens.params[-1]  # Assumes the server name is the last parameter
                         self.server_text_widget.insert(tk.END, f"PNOG: {pong_server}\r\n")
@@ -668,6 +905,64 @@ class AsyncIRCClient:
                         print(f"Debug: Unhandled command {tokens.command}. Full line: {line}")
                         if line.startswith(f":{self.server}"):
                             await self.handle_server_message(line)
+
+    def sanitize_channel_name(self, channel):
+        #gotta remove any characters that are not alphanumeric or allowed special characters
+        return re.sub(r'[^\w\-\[\]{}^`|]', '_', channel)
+
+    def log_message(self, channel, sender, message, is_sent=False):
+        """
+        Logs your chats for later use.
+        """
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Split the message into lines
+        lines = message.split("\n")
+        
+        # Detect if the message is an action message
+        is_action = lines[0].startswith('* ')
+        
+        # Construct the log line
+        if is_sent:
+            if is_action:
+                log_line = f'[{timestamp}] {lines[0]}\n'
+            else:
+                log_line = f'[{timestamp}] <{self.nickname}> {lines[0]}\n'
+        else:
+            if is_action:
+                log_line = f'[{timestamp}] {lines[0]}\n'
+            else:
+                log_line = f'[{timestamp}] <{sender}> {lines[0]}\n'
+        
+        # Add the subsequent lines without timestamp
+        for line in lines[1:]:
+            if is_action:
+                log_line += f'           {line}\n'
+            else:
+                log_line += f'           <{sender if is_sent else self.nickname}> {line}\n'
+        
+        # Determine if running as a script or as a frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled
+            script_directory = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            script_directory = os.path.dirname(os.path.abspath(__file__))
+        
+        # Construct the full path for the Logs directory
+        logs_directory = os.path.join(script_directory, 'Logs')
+        
+        try:
+            # Create the Logs directory if it doesn't exist
+            os.makedirs(logs_directory, exist_ok=True)
+
+            # Construct the full path for the log file inside the Logs directory
+            filename = os.path.join(logs_directory, f'irc_log_{self.sanitize_channel_name(channel)}.txt')
+
+            with open(filename, 'a', encoding='utf-8') as file:
+                file.write(log_line)
+        except Exception as e:
+            print(f"Error logging message: {e}")
 
     async def command_parser(self, user_input):
         args = user_input[1:].split() if user_input.startswith('/') else []
@@ -679,6 +974,13 @@ class AsyncIRCClient:
             case "join":
                 channel_name = args[1]
                 await self.join_channel(channel_name)
+
+            case "who":
+                await self.handle_who_command(args[1:])
+
+            case "whois": #who is that?
+                target = user_input.split()[1]
+                await self.whois(target)
 
             case "part":
                 channel_name = args[1]
@@ -728,6 +1030,10 @@ class AsyncIRCClient:
                     # Trim the messages list if it exceeds 200 lines
                     if len(self.channel_messages[self.current_channel]) > 200:
                         self.channel_messages[self.current_channel] = self.channel_messages[self.current_channel][-200:]
+
+                    # Log the sent message using the new logging method
+                    self.log_message(self.current_channel, self.nickname, user_input, is_sent=True)
+
                 else:
                     self.text_widget.insert(tk.END, "No channel selected. Use /join to join a channel.\r\n")
 
@@ -735,6 +1041,28 @@ class AsyncIRCClient:
                 self.text_widget.insert(tk.END, "Invalid command. Type /help for a list of commands.\r\n")
 
         return True
+
+    async def handle_who_command(self, args):
+        """
+        Handle the WHO command entered by the user.
+        """
+        if not args:
+            # General WHO
+            await self.send_message('WHO')
+        elif args[0].startswith('#'):
+            # WHO on a specific channel
+            channel = args[0]
+            await self.send_message(f'WHO {channel}')
+        else:
+            # WHO with mask or user host
+            mask = args[0]
+            await self.send_message(f'WHO {mask}')
+
+    async def whois(self, target):
+        """
+        Who is this? Sends a whois request
+        """
+        await self.send_message(f'WHOIS {target}')
 
     async def handle_action(self, args):
         action_message = ' '.join(args[1:])
@@ -805,6 +1133,7 @@ class IRCGui:
 
         self.channel_lists = {}
         self.server_users = {}
+        self.nickname_colors = {}
 
         # Server selection dropdown menu
         self.server_var = tk.StringVar(self.master)
@@ -859,6 +1188,7 @@ class IRCGui:
 
         self.entry_widget = tk.Entry(self.master)
         self.entry_widget.pack(side='bottom', fill='x')
+        self.entry_widget.bind('<Tab>', self.handle_tab_complete)
 
         # Initialize the current nickname and channel label variable
         self.current_nick_channel = tk.StringVar(value="Nickname | #Channel" + " &>")
@@ -923,6 +1253,7 @@ class IRCGui:
             # Clear all background color changes in the channel listbox
             for idx in range(self.channel_listbox.size()):
                 self.channel_listbox.itemconfig(idx, {'bg': 'black'})
+                self.highlight_nickname()
 
     async def switch_channel(self, channel_name):
         # Clear the text window
@@ -935,6 +1266,7 @@ class IRCGui:
             
             # Display the last messages for the current channel
             self.irc_client.display_last_messages(self.irc_client.current_channel)
+            self.highlight_nickname()
             
             self.irc_client.update_gui_user_list(channel_name)
             self.insert_and_scroll()
@@ -953,26 +1285,158 @@ class IRCGui:
 
     def highlight_nickname(self):
         """Highlight the user's nickname in the text_widget."""
-        nickname = self.irc_client.nickname
-        if not nickname:
+        user_nickname = self.irc_client.nickname
+        if not user_nickname:
             return
+
+        # Configure the color for the user's nickname
+        self.text_widget.tag_configure("nickname", foreground="#39ff14")
 
         # Start at the beginning of the text_widget
         start_idx = "1.0"
         while True:
-            # Find the position of the next instance of the nickname
-            start_idx = self.text_widget.search(nickname, start_idx, stopindex=tk.END)
+            # Find the position of the next instance of the user's nickname
+            start_idx = self.text_widget.search(user_nickname, start_idx, stopindex=tk.END)
             if not start_idx:
                 break
 
             # Calculate the end index based on the length of the nickname
-            end_idx = self.text_widget.index(f"{start_idx}+{len(nickname)}c")
+            end_idx = self.text_widget.index(f"{start_idx}+{len(user_nickname)}c")
 
             # Apply the tag to the found nickname
             self.text_widget.tag_add("nickname", start_idx, end_idx)
 
             # Update the start index to search from the position after the current found nickname
             start_idx = end_idx
+
+        # Start again at the beginning of the text_widget for other nicknames enclosed in <>
+        start_idx = "1.0"
+        while True:
+            start_idx = self.text_widget.search('<', start_idx, stopindex=tk.END)
+            if not start_idx:
+                break
+
+            end_idx = self.text_widget.search('>', start_idx, stopindex=tk.END)
+            if not end_idx:
+                break
+
+            nickname = self.text_widget.get(start_idx + '+1c', end_idx + '-1c')
+
+            # Check if a color for this nickname is already stored, if not, generate and store it
+            if nickname not in self.nickname_colors:
+                random_color = self.generate_random_color()
+                self.nickname_colors[nickname] = random_color
+
+            nickname_color = self.nickname_colors[nickname]
+            self.text_widget.tag_add(nickname, start_idx, end_idx + '+1c')  # Include the '>'
+            self.text_widget.tag_configure(nickname, foreground=nickname_color)
+
+            # Update the start index to search from the position after the current found nickname
+            start_idx = end_idx + '+1c'
+
+    def generate_random_color(self):
+        while True:
+            # Generate random values for each channel
+            r = random.randint(50, 255)
+            g = random.randint(50, 255)
+            b = random.randint(50, 255)
+            
+            # Ensure the difference between the maximum and minimum channel values is above a threshold
+            if max(r, g, b) - min(r, g, b) > 50:  # 50 is the threshold, you can adjust this value as needed
+                return "#{:02x}{:02x}{:02x}".format(r, g, b)
+
+    def trigger_desktop_notification(self, channel_name=None, title="Ping", message_content=None):
+        """
+        Show a system desktop notification.
+        """
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        # Check if the application window is the active window
+        if self.is_app_focused():  # If the app is focused, return early
+            return
+
+        if channel_name:
+            # Ensure channel_name is a string and replace problematic characters
+            channel_name = str(channel_name).replace("#", "channel ")
+            title = f"{title} from {channel_name}"
+            if message_content:
+                message = f"{channel_name}: {message_content}"
+            else:
+                message = f"You've been pinged in {channel_name}!"
+
+        icon_path = os.path.join(script_directory, "rude.ico")
+
+        try:
+            # Desktop Notification
+            notification.notify(
+                title=title,
+                message=message,
+                app_icon=icon_path,  
+                timeout=5,  
+            )
+        except Exception as e:
+            print(f"Desktop notification error: {e}")
+
+    def is_app_focused(self):
+        return bool(self.master.focus_displayof())
+
+    def handle_tab_complete(self, event):
+        """
+        Tab complete with cycling through possible matches.
+        """
+        # Get the current input in the input entry field
+        user_input = self.entry_widget.get()
+        cursor_pos = self.entry_widget.index(tk.INSERT)
+
+        # Find the partial nick before the cursor position
+        partial_nick = ''
+        for i in range(cursor_pos - 1, -1, -1):
+            char = user_input[i]
+            if not char.isalnum() and char not in "_-^[]{}\\`|":
+                break
+            partial_nick = char + partial_nick
+
+        # Cancel any previous timers
+        if hasattr(self, 'tab_completion_timer'):
+            self.master.after_cancel(self.tab_completion_timer)
+
+        # Get the user list for the current channel
+        current_channel = self.irc_client.current_channel
+        if current_channel in self.irc_client.channel_users:
+            user_list = self.irc_client.channel_users[current_channel]
+        else:
+            return
+
+        # Remove @ and + symbols from nicknames
+        user_list_cleaned = [nick.lstrip('@+') for nick in user_list]
+
+        # Initialize or update completions list
+        if not hasattr(self, 'tab_complete_completions') or not hasattr(self, 'last_tab_time') or (time.time() - self.last_tab_time) > 1.0:
+            self.tab_complete_completions = [nick for nick in user_list_cleaned if nick.startswith(partial_nick)]
+            self.tab_complete_index = 0
+
+        # Update the time of the last tab press
+        self.last_tab_time = time.time()
+
+        if self.tab_complete_completions:
+            # Fetch the next completion
+            completed_nick = self.tab_complete_completions[self.tab_complete_index]
+            remaining_text = user_input[cursor_pos:]
+            completed_text = user_input[:cursor_pos - len(partial_nick)] + completed_nick + remaining_text
+            self.entry_widget.delete(0, tk.END)
+            self.entry_widget.insert(0, completed_text)
+            # Cycle to the next completion
+            self.tab_complete_index = (self.tab_complete_index + 1) % len(self.tab_complete_completions)
+
+        # Set up a timer to append ": " after half a second if no more tab presses
+        self.tab_completion_timer = self.master.after(300, self.append_colon_to_nick)
+
+        # Prevent default behavior of the Tab key
+        return 'break'
+
+    def append_colon_to_nick(self):
+        current_text = self.entry_widget.get()
+        self.entry_widget.delete(0, tk.END)
+        self.entry_widget.insert(0, current_text + ": ")
 
 def main():
     root = tk.Tk()
