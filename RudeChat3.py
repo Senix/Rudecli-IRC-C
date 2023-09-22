@@ -65,7 +65,7 @@ class AsyncIRCClient:
         await self.wait_for_welcome()
 
     async def connect_to_server(self):
-        TIMEOUT = 400  # seconds
+        TIMEOUT = 60  # seconds
         await self.gui.insert_text_widget(f'Connecting to server: {self.server}:{self.port}\r\n')
         self.gui.highlight_nickname()
 
@@ -348,18 +348,14 @@ class AsyncIRCClient:
                 print(f"Exception caught in keep_alive: {e}")
 
     async def handle_server_message(self, line):
-        self.server_text_widget.config(state=tk.NORMAL)
-        self.server_text_widget.insert(tk.END, f"{line}\r\n")
-        self.server_text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_server_widget(line + "\r\n")
         self.gui.insert_and_scroll()
 
     async def handle_notice_message(self, tokens):
         sender = tokens.hostmask if tokens.hostmask else "Server"
         target = tokens.params[0]
         message = tokens.params[1]
-        self.server_text_widget.config(state=tk.NORMAL)
-        self.server_text_widget.insert(tk.END, f"NOTICE {sender}: {message}\r\n")
-        self.server_text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_server_widget(f"NOTICE {sender}: {message}\r\n")
         self.gui.insert_and_scroll()
 
     async def handle_ctcp(self, tokens):
@@ -409,11 +405,9 @@ class AsyncIRCClient:
                 case _:
                     print(f"Unhandled CTCP command: {ctcp_command}")
 
-    def notify_user_of_mention(self, server, channel):
+    async def notify_user_of_mention(self, server, channel):
         notification_msg = f"Mention on {server} in {channel}"
-        self.server_text_widget.config(state=tk.NORMAL)
-        self.server_text_widget.insert(tk.END, f"\n{notification_msg}\n")
-        self.server_text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_server_widget(f"\n{notification_msg}\n")
         self.gui.insert_and_scroll()
 
         # Highlight the mentioned channel in the Listbox
@@ -423,20 +417,13 @@ class AsyncIRCClient:
                 break
         
         # Play the beep sound/notification
-        self.trigger_beep_notification(channel_name=channel, message_content=notification_msg)
+        await self.trigger_beep_notification(channel_name=channel, message_content=notification_msg)
 
-    def trigger_beep_notification(self, channel_name=None, message_content=None):
+    async def trigger_beep_notification(self, channel_name=None, message_content=None):
         """
         You've been pinged! Plays a beep or noise on mention.
         """
-        
-        # Determine if running as a script or as a frozen executable
-        if getattr(sys, 'frozen', False):
-            # Running as compiled
-            script_directory = os.path.dirname(sys.executable)
-        else:
-            # Running as script
-            script_directory = os.path.dirname(os.path.abspath(__file__))
+        script_directory = os.path.dirname(os.path.abspath(__file__))
         
         if sys.platform.startswith("linux"):
             # Linux-specific notification sound using paplay
@@ -468,7 +455,7 @@ class AsyncIRCClient:
 
         # Check if the user is mentioned in the message
         if self.nickname in message:
-            self.notify_user_of_mention(self.server, target)
+            await self.notify_user_of_mention(self.server, target)
 
         # Check for CTCP command
         if message.startswith('\x01') and message.endswith('\x01'):
@@ -762,9 +749,7 @@ class AsyncIRCClient:
     async def handle_isupport(self, tokens):
         params = tokens.params[:-1]  # Exclude the trailing "are supported by this server" message
         isupport_message = " ".join(params)
-        self.server_text_widget.config(state=tk.NORMAL)
-        self.server_text_widget.insert(tk.END, f"ISUPPORT: {isupport_message}\r\n")
-        self.server_text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_server_widget(f"ISUPPORT: {isupport_message}\r\n")
         self.gui.insert_and_scroll()
 
         # Parse PREFIX for mode-to-symbol mapping
@@ -876,10 +861,7 @@ class AsyncIRCClient:
 
     async def save_whois_to_file(self, nickname):
         """Save WHOIS data for a given nickname to a file."""
-        if getattr(sys, 'frozen', False):
-            script_directory = os.path.dirname(sys.executable)
-        else:
-            script_directory = os.path.dirname(os.path.abspath(__file__))
+        script_directory = os.path.dirname(os.path.abspath(__file__))
         
         # Construct the full path for the WHOIS directory
         whois_directory = os.path.join(script_directory, 'whois')
@@ -975,9 +957,7 @@ class AsyncIRCClient:
 
     async def handle_pong(self, tokens):
         pong_server = tokens.params[-1]  # Assumes the server name is the last parameter
-        self.server_text_widget.config(state=tk.NORMAL)
-        self.server_text_widget.insert(tk.END, f"PONG: {pong_server}\r\n")
-        self.server_text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_server_widget(f"PONG: {pong_server}\r\n")
         self.gui.insert_and_scroll()
 
     async def handle_372(self, tokens):
@@ -992,17 +972,13 @@ class AsyncIRCClient:
 
     async def handle_900(self, tokens):
         logged_in_as = tokens.params[3]
-        self.server_text_widget.config(state=tk.NORMAL)
-        self.server_text_widget.insert(tk.END, f"Successfully authenticated as: {logged_in_as}\r\n")
-        self.server_text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_server_widget(f"Successfully authenticated as: {logged_in_as}\r\n")
         self.gui.insert_and_scroll()
 
     async def handle_396(self, tokens):
         hidden_host = tokens.params[1]
         reason = tokens.params[2]
-        self.server_text_widget.config(state=tk.NORMAL)
-        self.server_text_widget.insert(tk.END, f"Your host is now hidden as: {hidden_host}. Reason: {reason}\r\n")
-        self.server_text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_server_widget(f"Your host is now hidden as: {hidden_host}. Reason: {reason}\r\n")
         self.gui.insert_and_scroll()
 
     async def handle_error(self, tokens):
@@ -1022,6 +998,18 @@ class AsyncIRCClient:
             acknowledged_caps = tokens.params[-1]
             await self.gui.insert_text_widget(f"Enabled capabilities: {acknowledged_caps}\r\n")
             self.gui.insert_and_scroll()
+
+    async def handle_topic(self, tokens):
+        channel_name = tokens.params[1]  # Assuming tokens.params[1] contains the channel name
+        command = tokens.command
+
+        if command == "332":
+            topic = tokens.params[2]
+            self.gui.channel_topics[channel_name] = topic
+            self.gui.current_topic.set(f"Topic: {topic}")
+
+        elif command == "333":
+            who_set = tokens.params[2]
 
     async def handle_incoming_message(self):
         buffer = ""
@@ -1104,6 +1092,9 @@ class AsyncIRCClient:
                     case "311" | "312" | "313" | "317" | "319" | "301" | "671" | "338" | "318" | "330":
                         await self.handle_whois_replies(tokens.command, tokens)
 
+                    case "332" | "333":
+                        await self.handle_topic(tokens)
+
                     case "367":  
                         await self.handle_banlist(tokens)
                             
@@ -1182,12 +1173,7 @@ class AsyncIRCClient:
                 log_line += f'           <{sender if is_sent else self.nickname}> {line}\n'
         
         # Determine if running as a script or as a frozen executable
-        if getattr(sys, 'frozen', False):
-            # Running as compiled
-            script_directory = os.path.dirname(sys.executable)
-        else:
-            # Running as script
-            script_directory = os.path.dirname(os.path.abspath(__file__))
+        script_directory = os.path.dirname(os.path.abspath(__file__))
         
         # Construct the full path for the Logs directory
         logs_directory = os.path.join(script_directory, 'Logs')
@@ -1758,16 +1744,28 @@ class IRCGui:
 
         # Initialize other instance variables
         self.channel_lists = {}
-        self.server_users = {}
         self.nickname_colors = {}
         self.clients = {}
+        self.channel_topics = {}
+
+        # Server and Topic Frame
+        self.server_topic_frame = tk.Frame(self.master, bg="black")
+        self.server_topic_frame.grid(row=0, column=0, columnspan=2, sticky='nsew')
 
         # Server selection dropdown
         self.server_var = tk.StringVar(self.master)
-        self.server_dropdown = ttk.Combobox(self.master, textvariable=self.server_var, width=20)
+        self.server_dropdown = ttk.Combobox(self.server_topic_frame, textvariable=self.server_var, width=20)
         self.server_dropdown.grid(row=0, column=0, sticky='w')
         self.server_dropdown['values'] = []
         self.server_dropdown.bind('<<ComboboxSelected>>', self.on_server_change)
+
+        # Topic label
+        self.current_topic = tk.StringVar(value="Topic: ")
+        self.topic_label = tk.Label(self.server_topic_frame, textvariable=self.current_topic, bg="black", fg="white", padx=5, pady=1)
+        self.topic_label.grid(row=1, column=0, sticky='w')
+        self.topic_label.bind("<Enter>", self.show_topic_tooltip)
+        self.topic_label.bind("<Leave>", self.hide_topic_tooltip)
+        self.tooltip = None
 
         # Main text widget
         self.text_widget = ScrolledText(self.frame, wrap='word', bg="black", fg="#C0FFEE")
@@ -1828,6 +1826,7 @@ class IRCGui:
         self.irc_client = AsyncIRCClient(self.text_widget, self.server_text_widget, self.entry_widget, self.master, self)
 
         # Configure grid weights
+        self.master.grid_rowconfigure(0, weight=0)
         self.master.grid_rowconfigure(1, weight=1)
         self.master.grid_columnconfigure(0, weight=0)
         self.master.grid_columnconfigure(1, weight=1)
@@ -1845,10 +1844,32 @@ class IRCGui:
         self.channel_frame.grid_rowconfigure(1, weight=1)
         self.channel_frame.grid_columnconfigure(0, weight=1)
 
+    def show_topic_tooltip(self, event):
+        if self.tooltip:
+            self.tooltip.destroy()
+        x, y, _, _ = self.topic_label.bbox("insert")
+        x += self.topic_label.winfo_rootx() + 25
+        y += self.topic_label.winfo_rooty() + 25
+        self.tooltip = tk.Toplevel(self.topic_label)
+        self.tooltip.wm_overrideredirect(True)
+        self.tooltip.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(self.tooltip, text=self.current_topic.get(), justify='left')
+        label.pack()
+
+    def hide_topic_tooltip(self, event):
+        if self.tooltip:
+            self.tooltip.destroy()
+        self.tooltip = None
+
     async def insert_text_widget(self, message):
         self.text_widget.config(state=tk.NORMAL)
         self.text_widget.insert(tk.END, message)
         self.text_widget.config(state=tk.DISABLED)
+
+    async def insert_server_widget(self, message):
+        self.server_text_widget.config(state=tk.NORMAL)
+        self.server_text_widget.insert(tk.END, message)
+        self.server_text_widget.config(state=tk.DISABLED)
 
     async def send_quit_to_all_clients(self):
         for irc_client in self.clients.values():
@@ -1856,19 +1877,15 @@ class IRCGui:
             await irc_client.send_message('QUIT')
 
     def add_client(self, server_name, irc_client):
+        print(f"Adding client: {server_name}")  # Debugging line
         self.clients[server_name] = irc_client
         current_servers = list(self.server_dropdown['values'])
         current_servers.append(server_name)
         self.server_dropdown['values'] = current_servers
         self.server_var.set(server_name)  # Set the current server
         self.channel_lists[server_name] = irc_client.joined_channels
-
-    def replace_client(self, old_client, new_client):
-        server_name = old_client.server
-        # Remove the old client
-        del self.clients[server_name]
-        # Add the new client
-        self.add_client(server_name, new_client)
+        print(f"Server Dropdown Values: {self.server_dropdown['values']}")  # Debugging line
+        print(f"Current Clients: {self.clients.keys()}")  # Debugging line
 
     def on_server_change(self, event):
         selected_server = self.server_var.get()
@@ -1912,10 +1929,9 @@ class IRCGui:
             clicked_channel = self.channel_listbox.get(clicked_index[0])
             loop.create_task(self.switch_channel(clicked_channel))
 
-            # Clear all background color changes in the channel listbox
-            for idx in range(self.channel_listbox.size()):
-                self.channel_listbox.itemconfig(idx, {'bg': 'black'})
-                self.highlight_nickname()
+            # Clear the background color changes of the clicked channel only
+            self.channel_listbox.itemconfig(clicked_index, {'bg': 'black'})
+            self.highlight_nickname()
 
     async def switch_channel(self, channel_name):
         # Clear the text window
@@ -1926,6 +1942,10 @@ class IRCGui:
         if channel_name in self.irc_client.joined_channels:
             self.irc_client.current_channel = channel_name
             self.update_nick_channel_label()
+
+            # Update topic label
+            current_topic = self.channel_topics.get(channel_name, "N/A")
+            self.current_topic.set(f"Topic: {current_topic}")
             
             # Display the last messages for the current channel
             await self.irc_client.display_last_messages(self.irc_client.current_channel)
@@ -1933,6 +1953,9 @@ class IRCGui:
             
             self.irc_client.update_gui_user_list(channel_name)
             self.insert_and_scroll()
+            print(f"Switching to channel {channel_name}. Current topic should be {self.channel_topics.get(channel_name, 'N/A')}")
+            print(f"Current channel topics: {self.channel_topics}")
+
         else:
             await self.insert_text_widget(f"Not a member of channel {channel_name}\r\n")
 
@@ -2224,8 +2247,9 @@ def main():
                 if e.errno == 121:  # Handle the semaphore timeout error
                     print("Error: Connection timeout. Retrying...")
                 else:
-                    # If it's another error, raise or handle differently.
                     raise
+            except Exception as e:
+                print(f"Failed to connect to {fallback_server_name} due to {e}. Proceeding to the next server.")
 
         # Automatically select the first server if there are any
         if app.server_dropdown['values']:
