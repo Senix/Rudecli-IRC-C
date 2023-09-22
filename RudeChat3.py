@@ -16,6 +16,7 @@ import tkinter as tk
 from plyer import notification
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
+from tkinter import Tk, Frame, Label, Entry, Listbox, Scrollbar, StringVar
 
 class AsyncIRCClient:
     def __init__(self, text_widget, server_text_widget, entry_widget, master, gui):
@@ -25,6 +26,7 @@ class AsyncIRCClient:
         self.server_text_widget = server_text_widget
         self.joined_channels = []
         self.motd_lines = []
+        self.chantypes = []
         self.current_channel = ''
         self.nickname = ''
         self.channel_messages = {}
@@ -66,28 +68,29 @@ class AsyncIRCClient:
         TIMEOUT = 400  # seconds
         await self.gui.insert_text_widget(f'Connecting to server: {self.server}:{self.port}\r\n')
         self.gui.highlight_nickname()
-        loop = asyncio.get_event_loop()
-        if self.ssl_enabled:
-            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            context.check_hostname = True
-            context.verify_mode = ssl.CERT_REQUIRED
-            try:
+
+        try:
+            if self.ssl_enabled:
+                context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+                context.check_hostname = True
+                context.verify_mode = ssl.CERT_REQUIRED
                 self.reader, self.writer = await asyncio.wait_for(
-                    loop.create_connection(
-                        lambda: asyncio.StreamReaderProtocol(asyncio.StreamReader(), loop=loop),
-                        host=self.server, port=self.port, ssl=context),
+                    asyncio.open_connection(self.server, self.port, ssl=context),
                     timeout=TIMEOUT
                 )
-            except asyncio.TimeoutError:
-                await self.gui.insert_text_widget(f"Connection timeout. Please try again later.\r\n")
-        else:
-            try:
+            else:
                 self.reader, self.writer = await asyncio.wait_for(
                     asyncio.open_connection(self.server, self.port),
                     timeout=TIMEOUT
                 )
-            except asyncio.TimeoutError:
-                await self.gui.insert_text_widget(f"Connection timeout. Please try again later.\r\n")
+        except asyncio.TimeoutError:
+            await self.gui.insert_text_widget(f"Connection timeout. Please try again later.\r\n")
+        except OSError as e:
+            if e.winerror == 121:  # The semaphore error that I hate.
+                await self.gui.insert_text_widget("The semaphore timeout period has expired. Reconnecting...\r\n")
+                await self.reconnect()
+            else:
+                await self.gui.insert_text_widget(f"An unexpected error occurred: {str(e)}\r\n")
 
     async def send_initial_commands(self):
         await self.gui.insert_text_widget(f'Sent client registration commands.\r\n')
@@ -103,6 +106,24 @@ class AsyncIRCClient:
 
         if self.nickserv_password:
             await self.send_message(f'PRIVMSG NickServ :IDENTIFY {self.nickserv_password}')
+
+    async def handle_motd_line(self, tokens):
+        motd_line = tokens.params[-1]  # Assumes the MOTD line is the last parameter
+        self.motd_lines.append(motd_line)
+
+    async def handle_motd_start(self, tokens):
+        self.motd_lines.clear()
+        motd_start_line = tokens.params[-1]  # Assumes the introductory line is the last parameter
+        self.motd_lines.append(motd_start_line)
+
+    async def handle_motd_end(self, tokens):
+        # Combine the individual MOTD lines into a single string
+        full_motd = "\n".join(self.motd_lines)
+        # Display the full MOTD, cleaned up
+        await self.gui.insert_text_widget(f"Message of the Day:\n{full_motd}\r\n")
+        self.gui.insert_and_scroll()
+        # Clear the MOTD buffer for future use
+        self.motd_lines.clear()
             
     async def wait_for_welcome(self):
         MAX_RETRIES = 5
@@ -122,6 +143,32 @@ class AsyncIRCClient:
                 retries += 1
                 await asyncio.sleep(RETRY_DELAY)
         await self.gui.insert_text_widget("Failed to reconnect after multiple attempts. Please check your connection.\r\n")
+
+    async def handle_connection_info(self, tokens):
+        connection_info = tokens.params[-1]  # Assumes the connection info is the last parameter
+        await self.gui.insert_text_widget(f"Server Info: {connection_info}\r\n")
+        self.gui.insert_and_scroll()
+
+    async def handle_global_users_info(self, tokens):
+        global_users_info = tokens.params[-1]  # Assumes the global users info is the last parameter
+        await self.gui.insert_text_widget(f"Server Users Info: {global_users_info}\r\n")
+        self.gui.insert_and_scroll()
+
+    async def handle_nickname_conflict(self, tokens):
+        new_nickname = self.nickname + str(random.randint(1, 99))
+        await self.send_message(f'NICK {new_nickname}')
+        self.nickname = new_nickname
+        await self.gui.insert_text_widget(f"Nickname already in use. Changed nickname to: {self.nickname}\r\n")
+
+    async def initial_ping(self, tokens):
+        ping_param = tokens.params[0]
+        await self.send_message(f'PONG {ping_param}')
+        self.gui.insert_and_scroll()
+
+    async def automatic_join(self):
+        for channel in self.auto_join_channels:
+            await self.join_channel(channel)
+            await asyncio.sleep(0.3)
 
     async def _await_welcome_message(self):
         await self.gui.insert_text_widget(f'Waiting for welcome message from server.\r\n')
@@ -161,46 +208,25 @@ class AsyncIRCClient:
                         await self.handle_isupport(tokens)
                         self.gui.insert_and_scroll()
                     case "250":
-                        connection_info = tokens.params[-1]  # Assumes the connection info is the last parameter
-                        await self.gui.insert_text_widget(f"Server Info: {connection_info}\r\n")
-                        self.gui.insert_and_scroll()
+                        await self.handle_connection_info(tokens)
                     case "266":
-                        global_users_info = tokens.params[-1]  # Assumes the global users info is the last parameter
-                        await self.gui.insert_text_widget(f"Server Users Info: {global_users_info}\r\n")
-                        self.gui.insert_and_scroll()
+                        await self.handle_global_users_info(tokens)
                     case "433":  # Nickname already in use
-                        new_nickname = self.nickname + str(random.randint(1, 99))
-                        await self.send_message(f'NICK {new_nickname}')
-                        self.nickname = new_nickname
-                        await self.gui.insert_text_widget(f"Nickname already in use. Changed nickname to: {self.nickname}\r\n")
+                        await self.handle_nickname_conflict(tokens)
                     case "372":  # Individual line of MOTD
-                        motd_line = tokens.params[-1]  # Assumes the MOTD line is the last parameter
-                        self.motd_lines.append(motd_line)
+                        await self.handle_motd_line(tokens)
                     case "375":  # Start of MOTD
-                        self.motd_lines.clear()
-                        motd_start_line = tokens.params[-1]  # Assumes the introductory line is the last parameter
-                        self.motd_lines.append(motd_start_line)
+                        await self.handle_motd_start(tokens)
                     case "376":  # End of MOTD
-                        # Combine the individual MOTD lines into a single string
-                        full_motd = "\n".join(self.motd_lines)
-                        # Display the full MOTD, cleaned up
-                        await self.gui.insert_text_widget(f"Message of the Day:\n{full_motd}\r\n")
-                        self.gui.insert_and_scroll()
-                        # Clear the MOTD buffer for future use
-                        self.motd_lines.clear()
+                        await self.handle_motd_end(tokens)
                     case "PING":
-                        ping_param = tokens.params[0]
-                        await self.send_message(f'PONG {ping_param}')
-                        self.gui.insert_and_scroll()
+                        await self.initial_ping(tokens)
                     case _:
                         self.gui.insert_and_scroll()
-
+            #
             if received_001:
-                # Auto-join channels
-                for channel in self.auto_join_channels:
-                    await self.join_channel(channel)
-                    await asyncio.sleep(1)
-                return  # Successfully connected and received 001
+                await self.automatic_join()
+                return
 
     async def handle_cap(self, tokens):
         print(f"[DEBUG] Handling CAP: {tokens.params}")
@@ -248,10 +274,19 @@ class AsyncIRCClient:
             print("Timeout while sending message.")
 
     async def join_channel(self, channel):
+        if not self.is_valid_channel(channel):
+            print(f"Invalid channel name {channel}.")
+            await self.gui.insert_text_widget(f"Invalid channel name {channel}.\r\n")
+            self.gui.insert_and_scroll()
+            return
+
         await self.send_message(f'JOIN {channel}')
         self.joined_channels.append(channel)
         self.gui.channel_lists[self.server] = self.joined_channels  # Update the GUI channel list
         self.update_gui_channel_list()  # Update the channel list in GUI
+
+    def is_valid_channel(self, channel):
+        return any(channel.startswith(prefix) for prefix in self.chantypes)
 
     async def leave_channel(self, channel):
         await self.send_message(f'PART {channel}')
@@ -271,21 +306,36 @@ class AsyncIRCClient:
         for user in self.channel_users.get(channel, []):
             self.gui.user_listbox.insert(tk.END, user)
 
+    async def reset_state(self):
+        self.joined_channels.clear()
+        self.motd_lines.clear()
+        self.channel_messages.clear()
+        self.channel_users.clear()
+        self.user_modes.clear()
+        self.mode_to_symbol.clear()
+        self.whois_data.clear()
+        self.download_channel_list.clear()
+        self.whois_executed.clear()
+
     async def reconnect(self):
-        await self.gui.insert_text_widget(f'Connection lost. Attempting to reconnect...\r\n')
-        self.gui.insert_and_scroll()
         MAX_RETRIES = 5
+        RETRY_DELAY = 5
         retries = 0
         while retries < MAX_RETRIES:
             try:
+                # Reset client state before attempting to reconnect
+                await self.reset_state()
+                # Attempt to reconnect with the existing client
                 await self.connect()
-                await self.gui.insert_text_widget(f'Successfully reconnected.\r\n')
-                self.gui.insert_and_scroll()
+                if hasattr(self.gui, 'insert_text_widget'):  
+                    await self.gui.insert_text_widget(f'Successfully reconnected.\r\n')
+                    self.gui.insert_and_scroll()
+                else:
+                    print(f"GUI object not set")
                 return True  # Successfully reconnected
             except Exception as e:
                 retries += 1
-                await self.gui.insert_text_widget(f'Failed to reconnect ({retries}/{MAX_RETRIES}): {e}. Retrying in {RETRY_DELAY} seconds.\r\n')
-                self.gui.insert_and_scroll()
+                print(f'Failed to reconnect ({retries}/{MAX_RETRIES}): {e}. Retrying in {RETRY_DELAY} seconds.\r\n')
                 await asyncio.sleep(RETRY_DELAY)
         return False  # Failed to reconnect after MAX_RETRIES
 
@@ -583,7 +633,7 @@ class AsyncIRCClient:
                 self.update_user_listbox(channel)
 
     async def handle_nick(self, tokens):
-        old_nick = tokens.hostmask.nickname  # No stripping here, we will handle it in the loop
+        old_nick = tokens.hostmask.nickname
         new_nick = tokens.params[0]
 
         # Update the user's nick in all channel_users lists they are part of
@@ -603,13 +653,17 @@ class AsyncIRCClient:
                     # Display the nick change message in the channel
                     if channel not in self.channel_messages:
                         self.channel_messages[channel] = []
-                    self.channel_messages[channel].append(f"{old_nick} has changed their nickname to {new_nick}")
+                    self.channel_messages[channel].append(f"{old_nick} has changed their nickname to {new_nick}\r\n")
                     
                     # Insert message into the text widget only if this is the current channel
                     if channel == self.current_channel:
                         await self.gui.insert_text_widget(f"{old_nick} has changed their nickname to {new_nick}\r\n")
 
                     break
+
+        # If the old nickname is the same as the client's current nickname, update the client state
+        if old_nick == self.nickname:
+            await self.change_nickname(new_nick, is_from_token=True)
 
     def sort_users(self, users, channel):
         sorted_users = []
@@ -719,6 +773,9 @@ class AsyncIRCClient:
                 _, mappings = param.split("=")
                 modes, symbols = mappings[1:].split(")")
                 self.mode_to_symbol = dict(zip(modes, symbols))
+            elif param.startswith("CHANTYPES="):
+                _, channel_types = param.split("=")
+                self.chantypes = list(channel_types)
 
     async def handle_who_reply(self, tokens):
         """
@@ -1001,12 +1058,12 @@ class AsyncIRCClient:
                 try:
                     # Check for an empty line or line with only whitespace before attempting to tokenize
                     if len(line.strip()) == 0:
-                        await self.gui.insert_text_widget(f"Received an empty or whitespace-only line: '{line}'\r\n")
+                        print(f"Debug: Received an empty or whitespace-only line: '{line}'\r\n")
                         continue
 
                     # Additional check: Ensure that the line has at least one character
                     if len(line) < 1:
-                        await self.gui.insert_text_widget(f"Received a too-short line: '{line}'\r\n")
+                        print(f"Debug: Received a too-short line: '{line}'\r\n")
                         continue
 
                     # Debug statement to print the line before tokenizing
@@ -1282,7 +1339,6 @@ class AsyncIRCClient:
                 channel_name = args[1]
                 if channel_name in self.joined_channels:
                     self.current_channel = channel_name
-                    await self.gui.insert_text_widget(f"Switched to channel {self.current_channel}\r\n")
                     await self.display_last_messages(self.current_channel)
                     self.gui.highlight_nickname()
                 else:
@@ -1304,7 +1360,7 @@ class AsyncIRCClient:
                     await self.gui.insert_text_widget(f"{timestamp}Error: Please provide a new nickname.\r\n")
                     return
                 new_nick = args[1]
-                await self.change_nickname(new_nick)
+                await self.change_nickname(new_nick, is_from_token=False)
 
             case "ping":
                 await self.ping_server()
@@ -1318,7 +1374,6 @@ class AsyncIRCClient:
 
             case "quit":
                 await self.gui.send_quit_to_all_clients()
-                await asyncio.sleep(2)  # Allow some time for the message to be sent
                 self.master.destroy()
                 return False
 
@@ -1546,10 +1601,11 @@ class AsyncIRCClient:
         else:
             await self.gui.insert_text_widget("No channel selected. Use /join to join a channel.\r\n")
 
-    async def change_nickname(self, new_nick):
-        await self.send_message(f'NICK {new_nick}')
+    async def change_nickname(self, new_nick, is_from_token=False):
+        if not is_from_token:
+            await self.send_message(f'NICK {new_nick}')
         self.nickname = new_nick  # update local state
-        self.gui.update_nick_channel_label()  # assuming there's a method to update GUI
+        self.gui.update_nick_channel_label() 
 
     async def ping_server(self):
         await self.send_message(f'PING {self.server}')
@@ -1693,82 +1749,101 @@ class IRCGui:
     def __init__(self, master):
         self.master = master
         self.master.title("RudeChat")
-        self.master.geometry("1200x900")
+        self.master.geometry("1200x800")
         self.master.configure(bg="black")
 
+        # Main frame
         self.frame = tk.Frame(self.master, bg="black")
-        self.frame.pack(expand=1, fill='both')
+        self.frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
 
+        # Initialize other instance variables
         self.channel_lists = {}
         self.server_users = {}
         self.nickname_colors = {}
+        self.clients = {}
 
-        # Server selection dropdown menu
+        # Server selection dropdown
         self.server_var = tk.StringVar(self.master)
-        self.server_dropdown = ttk.Combobox(self.master, textvariable=self.server_var, width=20) 
-        self.server_dropdown.pack(side='top', anchor='w')
+        self.server_dropdown = ttk.Combobox(self.master, textvariable=self.server_var, width=20)
+        self.server_dropdown.grid(row=0, column=0, sticky='w')
         self.server_dropdown['values'] = []
         self.server_dropdown.bind('<<ComboboxSelected>>', self.on_server_change)
 
-        self.clients = {}
-
-        # Use ScrolledText widget for main chat area
+        # Main text widget
         self.text_widget = ScrolledText(self.frame, wrap='word', bg="black", fg="#C0FFEE")
-        self.text_widget.pack(side="left", expand=1, fill='both')
-        self.text_widget.tag_configure("nickname", foreground="#39ff14")
+        self.text_widget.grid(row=0, column=0, sticky="nsew")
 
-        # Frame to hold both User and Channel listboxes
+        # List frames
         self.list_frame = tk.Frame(self.frame, bg="black")
-        self.list_frame.pack(side="right", fill='y')
+        self.list_frame.grid(row=0, column=1, sticky="nsew")
 
-        # Frame for User List
+        # User frame
         self.user_frame = tk.Frame(self.list_frame, bg="black")
-        self.user_frame.pack(side='top', fill='both')
+        self.user_frame.grid(row=0, column=0, sticky="nsew")
 
-        # User list label and Listbox widget with Scrollbar
         self.user_label = tk.Label(self.user_frame, text="Users", bg="black", fg="white")
-        self.user_label.pack(side='top', fill='x')
+        self.user_label.grid(row=0, column=0, sticky='ew')
+
         self.user_listbox = tk.Listbox(self.user_frame, height=25, width=16, bg="black", fg="#39ff14")
         self.user_scrollbar = tk.Scrollbar(self.user_frame, orient="vertical", command=self.user_listbox.yview)
         self.user_listbox.config(yscrollcommand=self.user_scrollbar.set)
-        self.user_listbox.pack(side='left', expand=1, fill='both')
-        self.user_scrollbar.pack(side='right', fill='y')
+        self.user_listbox.grid(row=1, column=0, sticky='nsew')
+        self.user_scrollbar.grid(row=1, column=1, sticky='ns')
 
-        # Frame for Channel List
+        # Channel frame
         self.channel_frame = tk.Frame(self.list_frame, bg="black")
-        self.channel_frame.pack(side='top', fill='both')
+        self.channel_frame.grid(row=1, column=0, sticky="nsew")
 
-        # Channel list label and Listbox widget with Scrollbar
         self.channel_label = tk.Label(self.channel_frame, text="Channels", bg="black", fg="white")
-        self.channel_label.pack(side='top', fill='x')
+        self.channel_label.grid(row=0, column=0, sticky='ew')
+
         self.channel_listbox = tk.Listbox(self.channel_frame, height=20, width=16, bg="black", fg="white")
         self.channel_scrollbar = tk.Scrollbar(self.channel_frame, orient="vertical", command=self.channel_listbox.yview)
         self.channel_listbox.config(yscrollcommand=self.channel_scrollbar.set)
-        self.channel_listbox.pack(side='left', expand=1, fill='both')
-        self.channel_scrollbar.pack(side='right', fill='y')
+        self.channel_listbox.grid(row=1, column=0, sticky='nsew')
+        self.channel_scrollbar.grid(row=1, column=1, sticky='ns')
         self.channel_listbox.bind('<ButtonRelease-1>', self.on_channel_click)
 
-        # Server Console using ScrolledText widget
+        # Server frame
         self.server_frame = tk.Frame(self.master, height=100, bg="black")
-        self.server_frame.pack(side='top', fill='x')
-        self.server_text_widget = ScrolledText(self.server_frame, wrap='word', height=5, bg="black", fg="#7882ff")
-        self.server_text_widget.pack(side="left", expand=1, fill='both')
-        self.server_text_widget.config(state=tk.DISABLED)
-        self.text_widget.config(state=tk.DISABLED)
+        self.server_frame.grid(row=2, column=0, columnspan=2, sticky='ew')
 
+        # Configure column to expand
+        self.server_frame.grid_columnconfigure(0, weight=1)
+
+        self.server_text_widget = ScrolledText(self.server_frame, wrap='word', height=5, bg="black", fg="#7882ff")
+        self.server_text_widget.grid(row=0, column=0, sticky='nsew')
+
+        # Entry widget
         self.entry_widget = tk.Entry(self.master)
-        self.entry_widget.pack(side='bottom', fill='x')
+        self.entry_widget.grid(row=3, column=1, sticky='ew')
         self.entry_widget.bind('<Tab>', self.handle_tab_complete)
 
-        # Initialize the current nickname and channel label variable
+        # Label for nickname and channel
         self.current_nick_channel = tk.StringVar(value="Nickname | #Channel" + " &>")
-        
-        # Create a label to display the current nickname and channel
         self.nick_channel_label = tk.Label(self.master, textvariable=self.current_nick_channel, bg="black", fg="white", padx=5, pady=1)
-        self.nick_channel_label.pack(side='left', fill='y', before=self.entry_widget)
+        self.nick_channel_label.grid(row=3, column=0, sticky='w')
 
         # Initialize the AsyncIRCClient and set the GUI reference
         self.irc_client = AsyncIRCClient(self.text_widget, self.server_text_widget, self.entry_widget, self.master, self)
+
+        # Configure grid weights
+        self.master.grid_rowconfigure(1, weight=1)
+        self.master.grid_columnconfigure(0, weight=0)
+        self.master.grid_columnconfigure(1, weight=1)
+
+        self.frame.grid_rowconfigure(0, weight=1)
+        self.frame.grid_columnconfigure(0, weight=1)
+        self.frame.grid_columnconfigure(1, weight=0)
+
+        self.list_frame.grid_rowconfigure(0, weight=1)
+        self.list_frame.grid_columnconfigure(0, weight=0)
+
+        self.user_frame.grid_rowconfigure(1, weight=1)
+        self.user_frame.grid_columnconfigure(0, weight=1)
+
+        self.channel_frame.grid_rowconfigure(1, weight=1)
+        self.channel_frame.grid_columnconfigure(0, weight=1)
 
     async def insert_text_widget(self, message):
         self.text_widget.config(state=tk.NORMAL)
@@ -1777,6 +1852,7 @@ class IRCGui:
 
     async def send_quit_to_all_clients(self):
         for irc_client in self.clients.values():
+            await asyncio.sleep(1)
             await irc_client.send_message('QUIT')
 
     def add_client(self, server_name, irc_client):
@@ -1786,6 +1862,13 @@ class IRCGui:
         self.server_dropdown['values'] = current_servers
         self.server_var.set(server_name)  # Set the current server
         self.channel_lists[server_name] = irc_client.joined_channels
+
+    def replace_client(self, old_client, new_client):
+        server_name = old_client.server
+        # Remove the old client
+        del self.clients[server_name]
+        # Add the new client
+        self.add_client(server_name, new_client)
 
     def on_server_change(self, event):
         selected_server = self.server_var.get()
@@ -1843,7 +1926,6 @@ class IRCGui:
         if channel_name in self.irc_client.joined_channels:
             self.irc_client.current_channel = channel_name
             self.update_nick_channel_label()
-            await self.insert_text_widget(f"Switched to channel {self.irc_client.current_channel}\r\n")
             
             # Display the last messages for the current channel
             await self.irc_client.display_last_messages(self.irc_client.current_channel)
