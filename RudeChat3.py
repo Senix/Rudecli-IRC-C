@@ -1839,8 +1839,6 @@ class IRCGui:
         self.user_listbox.config(yscrollcommand=self.user_scrollbar.set)
         self.user_listbox.pack(side='left', expand=1, fill='both')
         self.user_scrollbar.pack(side='right', fill='y')
-        self.server_text_widget.config(state=tk.DISABLED)
-        self.text_widget.config(state=tk.DISABLED)
 
         # Frame for Channel List
         self.channel_frame = tk.Frame(self.list_frame, bg="black")
@@ -1861,6 +1859,8 @@ class IRCGui:
         self.server_frame.pack(side='top', fill='x')
         self.server_text_widget = ScrolledText(self.server_frame, wrap='word', height=5, bg="black", fg="#7882ff")
         self.server_text_widget.pack(side="left", expand=1, fill='both')
+        self.server_text_widget.config(state=tk.DISABLED)
+        self.text_widget.config(state=tk.DISABLED)
 
         self.entry_widget = tk.Entry(self.master)
         self.entry_widget.pack(side='bottom', fill='x')
