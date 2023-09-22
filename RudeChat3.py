@@ -944,6 +944,64 @@ class AsyncIRCClient:
             self.update_user_listbox(self.current_channel)  # Pass current_channel here
             self.current_channel = ""
 
+    async def handle_pong(self, tokens):
+        pong_server = tokens.params[-1]  # Assumes the server name is the last parameter
+        self.server_text_widget.config(state=tk.NORMAL)
+        self.server_text_widget.insert(tk.END, f"PONG: {pong_server}\r\n")
+        self.server_text_widget.config(state=tk.DISABLED)
+        self.gui.insert_and_scroll()
+
+    async def handle_372(self, tokens):
+        motd_line = tokens.params[-1]
+        self.motd_lines.append(motd_line)
+
+    async def handle_376(self, tokens):
+        full_motd = "\n".join(self.motd_lines)
+        self.text_widget.config(state=tk.NORMAL)
+        self.text_widget.insert(tk.END, f"Message of the Day:\n{full_motd}\r\n")
+        self.text_widget.config(state=tk.DISABLED)
+        self.gui.insert_and_scroll()
+        self.motd_lines.clear()
+
+    async def handle_900(self, tokens):
+        logged_in_as = tokens.params[3]
+        self.server_text_widget.config(state=tk.NORMAL)
+        self.server_text_widget.insert(tk.END, f"Successfully authenticated as: {logged_in_as}\r\n")
+        self.server_text_widget.config(state=tk.DISABLED)
+        self.gui.insert_and_scroll()
+
+    async def handle_396(self, tokens):
+        hidden_host = tokens.params[1]
+        reason = tokens.params[2]
+        self.server_text_widget.config(state=tk.NORMAL)
+        self.server_text_widget.insert(tk.END, f"Your host is now hidden as: {hidden_host}. Reason: {reason}\r\n")
+        self.server_text_widget.config(state=tk.DISABLED)
+        self.gui.insert_and_scroll()
+
+    async def handle_error(self, tokens):
+        error_message = ' '.join(tokens.params) if tokens.params else 'Unknown error'
+        self.text_widget.config(state=tk.NORMAL)
+        self.text_widget.insert(tk.END, f"ERROR: {error_message}\r\n")
+        self.text_widget.config(state=tk.DISABLED)
+        self.gui.insert_and_scroll()
+
+    async def handle_cap_main(self, tokens):
+        subcommand = tokens.params[1].upper()
+        if subcommand == "LS":
+            capabilities = tokens.params[-1]
+            self.text_widget.config(state=tk.NORMAL)
+            self.text_widget.insert(tk.END, f"Server capabilities: {capabilities}\r\n")
+            self.text_widget.config(state=tk.DISABLED)
+            self.gui.insert_and_scroll()
+            # Optional: If you want to enable specific capabilities
+            # await self.send_message("CAP REQ :some-capability another-capability")
+        elif subcommand == "ACK":  # If the server acknowledges the capabilities you requested
+            acknowledged_caps = tokens.params[-1]
+            self.text_widget.config(state=tk.NORMAL)
+            self.text_widget.insert(tk.END, f"Enabled capabilities: {acknowledged_caps}\r\n")
+            self.text_widget.config(state=tk.DISABLED)
+            self.gui.insert_and_scroll()
+
     async def handle_incoming_message(self):
         buffer = ""
         current_users_list = []
@@ -1015,45 +1073,21 @@ class AsyncIRCClient:
 
                 match tokens.command:
                     case "ERROR":
-                        error_message = ' '.join(tokens.params) if tokens.params else 'Unknown error'
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"ERROR: {error_message}\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.handle_error(tokens)
                     case "353":  # NAMES list
                         await self.handle_names_list(tokens)
                                 
                     case "366":  # End of NAMES list
                         await self.handle_end_of_names_list()
 
-                    case "372":  # Individual line of MOTD
-                        motd_line = tokens.params[-1]  # Assumes the MOTD line is the last parameter
-                        self.motd_lines.append(motd_line)
-                    
-                    case "376":  # End of MOTD
-                        # Combine the individual MOTD lines into a single string
-                        full_motd = "\n".join(self.motd_lines)
-                        # Display the full MOTD, cleaned up
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"Message of the Day:\n{full_motd}\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
-                        self.gui.insert_and_scroll()
-                        # Clear the MOTD buffer for future use
-                        self.motd_lines.clear()
-
-                    case "900":  # Successful SASL authentication
-                        logged_in_as = tokens.params[3]
-                        self.server_text_widget.config(state=tk.NORMAL)
-                        self.server_text_widget.insert(tk.END, f"Successfully authenticated as: {logged_in_as}\r\n")
-                        self.server_text_widget.config(state=tk.DISABLED)
-                        self.gui.insert_and_scroll()
-
-                    case "396":  # Host hiding
-                        hidden_host = tokens.params[1]
-                        reason = tokens.params[2]
-                        self.server_text_widget.config(state=tk.NORMAL)
-                        self.server_text_widget.insert(tk.END, f"Your host is now hidden as: {hidden_host}. Reason: {reason}\r\n")
-                        self.server_text_widget.config(state=tk.DISABLED)
-                        self.gui.insert_and_scroll()
+                    case "372":
+                        await self.handle_372(tokens)
+                    case "376":
+                        await self.handle_376(tokens)
+                    case "900":
+                        await self.handle_900(tokens)
+                    case "396":
+                        await self.handle_396(tokens)
 
                     case "391":
                         await self.handle_time_request(tokens)
@@ -1098,28 +1132,9 @@ class AsyncIRCClient:
                         await self.send_message(f'PONG {ping_param}')
                         print(f"sent PONG: {ping_param}")
                     case "CAP":
-                        subcommand = tokens.params[1].upper()
-                        if subcommand == "LS":
-                            capabilities = tokens.params[-1]
-                            self.text_widget.config(state=tk.NORMAL)
-                            self.text_widget.insert(tk.END, f"Server capabilities: {capabilities}\r\n")
-                            self.text_widget.config(state=tk.DISABLED)
-                            self.gui.insert_and_scroll()
-                            
-                            # Optional: If you want to enable specific capabilities
-                            # await self.send_message("CAP REQ :some-capability another-capability")
-                        elif subcommand == "ACK":  # If the server acknowledges the capabilities you requested
-                            acknowledged_caps = tokens.params[-1]
-                            self.text_widget.config(state=tk.NORMAL)
-                            self.text_widget.insert(tk.END, f"Enabled capabilities: {acknowledged_caps}\r\n")
-                            self.text_widget.config(state=tk.DISABLED)
-                            self.gui.insert_and_scroll()
+                        await self.handle_cap_main(tokens)
                     case "PONG":
-                        pong_server = tokens.params[-1]  # Assumes the server name is the last parameter
-                        self.server_text_widget.config(state=tk.NORMAL)
-                        self.server_text_widget.insert(tk.END, f"PNOG: {pong_server}\r\n")
-                        self.server_text_widget.config(state=tk.DISABLED)
-                        self.gui.insert_and_scroll()
+                        await self.handle_pong(tokens)
                     case _:
                         print(f"Debug: Unhandled command {tokens.command}. Full line: {line}")
                         if line.startswith(f":{self.server}"):
@@ -1393,8 +1408,8 @@ class AsyncIRCClient:
                 await self.send_message_to_all_channels(message)
 
             case "quit":
-                await self.send_message('QUIT')
-                await asyncio.sleep(2)
+                await self.gui.send_quit_to_all_clients()
+                await asyncio.sleep(2)  # Allow some time for the message to be sent
                 self.master.destroy()
                 return False
 
@@ -1876,6 +1891,10 @@ class IRCGui:
         # Initialize the AsyncIRCClient and set the GUI reference
         self.irc_client = AsyncIRCClient(self.text_widget, self.server_text_widget, self.entry_widget, self.master, self)
 
+    async def send_quit_to_all_clients(self):
+        for irc_client in self.clients.values():
+            await irc_client.send_message('QUIT')
+
     def add_client(self, server_name, irc_client):
         self.clients[server_name] = irc_client
         current_servers = list(self.server_dropdown['values'])
@@ -1933,7 +1952,9 @@ class IRCGui:
 
     async def switch_channel(self, channel_name):
         # Clear the text window
+        self.text_widget.config(state=tk.NORMAL)
         self.text_widget.delete(1.0, tk.END)
+        self.text_widget.config(state=tk.DISABLED)
         
         if channel_name in self.irc_client.joined_channels:
             self.irc_client.current_channel = channel_name
