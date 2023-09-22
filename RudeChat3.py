@@ -88,7 +88,9 @@ class AsyncIRCClient:
         except OSError as e:
             if e.winerror == 121:  # The semaphore error that I hate.
                 await self.gui.insert_text_widget("The semaphore timeout period has expired. Reconnecting...\r\n")
-                await self.reconnect()
+                success = await self.reconnect()
+                if success:
+                    self.gui.add_server_to_combo_box(self.server_name)
             else:
                 await self.gui.insert_text_widget(f"An unexpected error occurred: {str(e)}\r\n")
 
@@ -327,6 +329,11 @@ class AsyncIRCClient:
                 await self.reset_state()
                 # Attempt to reconnect with the existing client
                 await self.connect()
+                
+                # Add server to combo box if reconnection is successful
+                if self.gui:
+                    self.gui.add_server_to_combo_box(self.server_name)  # Assuming such a method exists in your GUI class
+                
                 if hasattr(self.gui, 'insert_text_widget'):  
                     await self.gui.insert_text_widget(f'Successfully reconnected.\r\n')
                     self.gui.insert_and_scroll()
@@ -992,15 +999,15 @@ class AsyncIRCClient:
             capabilities = tokens.params[-1]
             await self.gui.insert_text_widget(f"Server capabilities: {capabilities}\r\n")
             self.gui.insert_and_scroll()
-            # Optional: If you want to enable specific capabilities
-            # await self.send_message("CAP REQ :some-capability another-capability")
+            # Requesting SASL capability
+            await self.send_message("CAP REQ :sasl")
         elif subcommand == "ACK":  # If the server acknowledges the capabilities you requested
             acknowledged_caps = tokens.params[-1]
             await self.gui.insert_text_widget(f"Enabled capabilities: {acknowledged_caps}\r\n")
             self.gui.insert_and_scroll()
 
     async def handle_topic(self, tokens):
-        channel_name = tokens.params[1]  # Assuming tokens.params[1] contains the channel name
+        channel_name = tokens.params[1] 
         command = tokens.command
 
         if command == "332":
@@ -1015,7 +1022,7 @@ class AsyncIRCClient:
         buffer = ""
         current_users_list = []
         current_channel = ""
-        timeout_seconds = 256  # Adjust this value based on requirements
+        timeout_seconds = 256  # seconds
         #
         while True:
             try:
@@ -2221,43 +2228,43 @@ class ChannelListWindow(tk.Toplevel):
         super().destroy()
 
 
+async def initialize_clients(app):
+    # List all files in the current directory
+    files = os.listdir()
+
+    # Filter out files that match the pattern "confX.rude" where X is a number
+    config_files = [f for f in files if f.startswith("conf") and f.endswith(".rude")]
+
+    # Sort the config files to maintain order
+    config_files.sort()
+
+    async def try_init_client_with_config(config_file, fallback_server_name):
+        try:
+            await app.init_client_with_config(config_file, fallback_server_name)
+        except OSError as e:
+            if e.errno == 121:  # Handle the semaphore timeout error
+                print("Error: Connection timeout. Retrying...")
+            else:
+                raise
+        except Exception as e:
+            print(f"Failed to connect to {fallback_server_name} due to {e}. Proceeding to the next server.")
+
+    tasks = [try_init_client_with_config(cf, f'Server_{i+1}') for i, cf in enumerate(config_files)]
+    await asyncio.gather(*tasks)
+
+    # Automatically select the first server if there are any
+    if app.server_dropdown['values']:
+        first_server = app.server_dropdown['values'][0]
+        app.server_var.set(first_server)
+        app.on_server_change(None)
+
 def main():
     root = tk.Tk()
     app = IRCGui(root)
 
     loop = asyncio.get_event_loop()
 
-    async def initialize_clients():
-        # List all files in the current directory
-        files = os.listdir()
-
-        # Filter out files that match the pattern "confX.rude" where X is a number
-        config_files = [f for f in files if f.startswith("conf") and f.endswith(".rude")]
-
-        # Sort the config files to maintain order
-        config_files.sort()
-
-        # Initialize clients for each config file
-        for i, config_file in enumerate(config_files):
-            fallback_server_name = f'Server_{i+1}'
-            
-            try:
-                await app.init_client_with_config(config_file, fallback_server_name)
-            except OSError as e:
-                if e.errno == 121:  # Handle the semaphore timeout error
-                    print("Error: Connection timeout. Retrying...")
-                else:
-                    raise
-            except Exception as e:
-                print(f"Failed to connect to {fallback_server_name} due to {e}. Proceeding to the next server.")
-
-        # Automatically select the first server if there are any
-        if app.server_dropdown['values']:
-            first_server = app.server_dropdown['values'][0]
-            app.server_var.set(first_server)
-            app.on_server_change(None)
-
-    loop.create_task(initialize_clients())
+    loop.create_task(initialize_clients(app))
 
     def tk_update():
         try:
