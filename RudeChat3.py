@@ -64,9 +64,7 @@ class AsyncIRCClient:
 
     async def connect_to_server(self):
         TIMEOUT = 400  # seconds
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f'Connecting to server: {self.server}:{self.port}\r\n')
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f'Connecting to server: {self.server}:{self.port}\r\n')
         self.gui.highlight_nickname()
         loop = asyncio.get_event_loop()
         if self.ssl_enabled:
@@ -81,9 +79,7 @@ class AsyncIRCClient:
                     timeout=TIMEOUT
                 )
             except asyncio.TimeoutError:
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, "Connection timeout. Please try again later.\r\n")
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(f"Connection timeout. Please try again later.\r\n")
         else:
             try:
                 self.reader, self.writer = await asyncio.wait_for(
@@ -91,14 +87,10 @@ class AsyncIRCClient:
                     timeout=TIMEOUT
                 )
             except asyncio.TimeoutError:
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, "Connection timeout. Please try again later.\r\n")
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(f"Connection timeout. Please try again later.\r\n")
 
     async def send_initial_commands(self):
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f'Sent client registration commands.\r\n')
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f'Sent client registration commands.\r\n')
         await self.send_message(f'NICK {self.nickname}')
         await self.send_message(f'USER {self.nickname} 0 * :{self.nickname}')
         
@@ -123,22 +115,16 @@ class AsyncIRCClient:
                 await self._await_welcome_message()
                 return  # Successfully connected and received 001
             except (OSError, ConnectionError) as e:
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, f"Error occurred: {e}. Retrying in {RETRY_DELAY} seconds.\r\n")
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(f"Error occurred: {e}. Retrying in {RETRY_DELAY} seconds.\r\n")
                 success = await self.reconnect()
                 if success:
                     return  # Successfully reconnected
                 retries += 1
                 await asyncio.sleep(RETRY_DELAY)
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, "Failed to reconnect after multiple attempts. Please check your connection.\r\n")
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget("Failed to reconnect after multiple attempts. Please check your connection.\r\n")
 
     async def _await_welcome_message(self):
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f'Waiting for welcome message from server.\r\n')
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f'Waiting for welcome message from server.\r\n')
         buffer = ""
         received_001 = False  # Variable to track if 001 message has been received
 
@@ -168,9 +154,7 @@ class AsyncIRCClient:
                         await self.handle_sasl_failed()
 
                     case "001":
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f'Connected to server: {self.server}:{self.port}\r\n')
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(f'Connected to server: {self.server}:{self.port}\r\n')
                         received_001 = True  # Set this to True upon receiving 001
                         self.gui.insert_and_scroll()
                     case "005":  # Handling the ISUPPORT message
@@ -178,23 +162,17 @@ class AsyncIRCClient:
                         self.gui.insert_and_scroll()
                     case "250":
                         connection_info = tokens.params[-1]  # Assumes the connection info is the last parameter
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"Server Info: {connection_info}\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(f"Server Info: {connection_info}\r\n")
                         self.gui.insert_and_scroll()
                     case "266":
                         global_users_info = tokens.params[-1]  # Assumes the global users info is the last parameter
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"Server Users Info: {global_users_info}\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(f"Server Users Info: {global_users_info}\r\n")
                         self.gui.insert_and_scroll()
                     case "433":  # Nickname already in use
                         new_nickname = self.nickname + str(random.randint(1, 99))
                         await self.send_message(f'NICK {new_nickname}')
                         self.nickname = new_nickname
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"Nickname already in use. Changed nickname to: {self.nickname}\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(f"Nickname already in use. Changed nickname to: {self.nickname}\r\n")
                     case "372":  # Individual line of MOTD
                         motd_line = tokens.params[-1]  # Assumes the MOTD line is the last parameter
                         self.motd_lines.append(motd_line)
@@ -206,9 +184,7 @@ class AsyncIRCClient:
                         # Combine the individual MOTD lines into a single string
                         full_motd = "\n".join(self.motd_lines)
                         # Display the full MOTD, cleaned up
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"Message of the Day:\n{full_motd}\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(f"Message of the Day:\n{full_motd}\r\n")
                         self.gui.insert_and_scroll()
                         # Clear the MOTD buffer for future use
                         self.motd_lines.clear()
@@ -254,9 +230,7 @@ class AsyncIRCClient:
         if not self.sasl_enabled:
             print(f"[DEBUG] SASL is not enabled.")
             return  # Skip SASL if it's not enabled
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f"SASL authentication successful.\r\n")
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f"SASL authentication successful.\r\n")
         await self.send_message("CAP END")
 
     async def handle_sasl_failed(self):
@@ -264,9 +238,7 @@ class AsyncIRCClient:
         if not self.sasl_enabled:
             print(f"[DEBUG] SASL is not enabled.")
             return  # Skip SASL if it's not enabled
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f"SASL authentication failed. Disconnecting.\r\n")
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f"SASL authentication failed. Disconnecting.\r\n")
 
     async def send_message(self, message):
         try:
@@ -300,25 +272,19 @@ class AsyncIRCClient:
             self.gui.user_listbox.insert(tk.END, user)
 
     async def reconnect(self):
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f'Connection lost. Attempting to reconnect...\r\n')
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f'Connection lost. Attempting to reconnect...\r\n')
         self.gui.insert_and_scroll()
         MAX_RETRIES = 5
         retries = 0
         while retries < MAX_RETRIES:
             try:
                 await self.connect()
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, f'Successfully reconnected.\r\n')
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(f'Successfully reconnected.\r\n')
                 self.gui.insert_and_scroll()
                 return True  # Successfully reconnected
             except Exception as e:
                 retries += 1
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, f'Failed to reconnect ({retries}/{MAX_RETRIES}): {e}. Retrying in {RETRY_DELAY} seconds.\r\n')
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(f'Failed to reconnect ({retries}/{MAX_RETRIES}): {e}. Retrying in {RETRY_DELAY} seconds.\r\n')
                 self.gui.insert_and_scroll()
                 await asyncio.sleep(RETRY_DELAY)
         return False  # Failed to reconnect after MAX_RETRIES
@@ -379,9 +345,7 @@ class AsyncIRCClient:
                     
                     # Display the message in the text_widget if the target matches the current channel or DM
                     if target == self.current_channel and self.gui.irc_client == self:
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, action_message)
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(action_message)
                         self.gui.highlight_nickname()
                         self.gui.insert_and_scroll()
                     else:
@@ -507,9 +471,7 @@ class AsyncIRCClient:
 
         # Display the message in the text_widget if the target matches the current channel or DM
         if target == self.current_channel and self.gui.irc_client == self:
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, f"{timestamp}<{sender}> {message}\r\n")
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(f"{timestamp}<{sender}> {message}\r\n")
             self.gui.highlight_nickname()
             self.gui.insert_and_scroll()
         else:
@@ -534,9 +496,7 @@ class AsyncIRCClient:
 
         # Display the message in the text_widget only if the channel matches the current channel
         if channel == self.current_channel and self.gui.irc_client == self:
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, join_message)
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(join_message)
             self.gui.insert_and_scroll()
 
         # If the user joining is the client's user, just return
@@ -550,9 +510,7 @@ class AsyncIRCClient:
         else:
             already_in_message = f"{user_info} is already in the user list for channel {channel}\r\n"
             if channel == self.current_channel and self.gui.irc_client == self:
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, already_in_message)
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(already_in_message)
                 self.gui.insert_and_scroll()
 
         # Sort the user list for the channel
@@ -564,10 +522,18 @@ class AsyncIRCClient:
     async def handle_part(self, tokens):
         user_info = tokens.hostmask.nickname  # No "@" symbol
         channel = tokens.params[0]
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f"{user_info} has parted from channel {channel}\r\n")
-        self.text_widget.config(state=tk.DISABLED)
-        self.gui.insert_and_scroll()
+        part_message = f"{user_info} has parted from channel {channel}\r\n"
+
+        # Update the message history for the channel
+        if channel not in self.channel_messages:
+            self.channel_messages[channel] = []
+
+        self.channel_messages[channel].append(part_message)
+
+        # Display the message in the text_widget only if the channel matches the current channel
+        if channel == self.current_channel and self.gui.irc_client == self:
+            await self.gui.insert_text_widget(part_message)
+            self.gui.insert_and_scroll()
 
         # Check if the user is in the channel_users list for the channel
         user_found = False
@@ -582,39 +548,43 @@ class AsyncIRCClient:
             # Update the user listbox for the channel
             self.update_user_listbox(channel)
         else:
+            print(f"{user_info} User not found.")
             pass
 
     async def handle_quit(self, tokens):
         user_info = tokens.hostmask.nickname  # No stripping needed here
         reason = tokens.params[0] if tokens.params else "No reason"
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f"{user_info} has quit: {reason}\r\n")
-        self.text_widget.config(state=tk.DISABLED)
-        self.gui.insert_and_scroll()
+        quit_message = f"{user_info} has quit: {reason}\r\n"
 
         # Remove the user from all channel_users lists
-        for channel in self.channel_users:
-            # Check if the user is in the channel_users list for the channel
+        for channel, users in self.channel_users.items():
             user_found = False
-            for user_with_symbol in self.channel_users.get(channel, []):
+            for idx, user_with_symbol in enumerate(users):
                 # Check if the stripped user matches user_info
                 if user_with_symbol.lstrip('@+%') == user_info:
                     user_found = True
-                    self.channel_users[channel].remove(user_with_symbol)
+                    del self.channel_users[channel][idx]
+                    
+                    # Update the message history for the channel
+                    if channel not in self.channel_messages:
+                        self.channel_messages[channel] = []
+
+                    self.channel_messages[channel].append(quit_message)
+
+                    # Display the message in the text_widget only if the channel matches the current channel
+                    if channel == self.current_channel and self.gui.irc_client == self:
+                        await self.gui.insert_text_widget(quit_message)
+                        self.gui.insert_and_scroll()
+
                     break
 
             if user_found:
                 # Update the user listbox for the channel
                 self.update_user_listbox(channel)
-            else:
-                pass
 
     async def handle_nick(self, tokens):
         old_nick = tokens.hostmask.nickname  # No stripping here, we will handle it in the loop
         new_nick = tokens.params[0]
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f"{old_nick} has changed their nickname to {new_nick}\r\n")
-        self.text_widget.config(state=tk.DISABLED)
 
         # Update the user's nick in all channel_users lists they are part of
         for channel, users in self.channel_users.items():
@@ -629,6 +599,16 @@ class AsyncIRCClient:
                     
                     # Update the user listbox for the channel if necessary
                     self.update_user_listbox(channel)
+
+                    # Display the nick change message in the channel
+                    if channel not in self.channel_messages:
+                        self.channel_messages[channel] = []
+                    self.channel_messages[channel].append(f"{old_nick} has changed their nickname to {new_nick}")
+                    
+                    # Insert message into the text widget only if this is the current channel
+                    if channel == self.current_channel:
+                        await self.gui.insert_text_widget(f"{old_nick} has changed their nickname to {new_nick}\r\n")
+
                     break
 
     def sort_users(self, users, channel):
@@ -769,9 +749,7 @@ class AsyncIRCClient:
                 message = f"User {details['nickname']} ({details['username']}@{details['host']}) on {details['server']} in {details['channel']}\r\n"
                 messages.append(message)
             final_message = "\n".join(messages)
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, final_message)
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(final_message)
             self.gui.insert_and_scroll()
             # Reset the who_details for future use
             self.who_details = []
@@ -835,9 +813,7 @@ class AsyncIRCClient:
                     ignore_suggestion = f"*!{self.whois_data[nickname]['Username']}@{self.whois_data[nickname]['Hostname']}"
                     whois_response += f"\nSuggested /ignore mask: {ignore_suggestion}\n"
 
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, whois_response)
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(whois_response)
                     self.gui.insert_and_scroll()
                     await self.save_whois_to_file(nickname)
 
@@ -874,9 +850,7 @@ class AsyncIRCClient:
 
         # Display the information in your client's GUI
         message = f"Server Time from {server_name}: {local_time}"
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, message)
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(message)
 
     async def handle_kick_event(self, tokens):
         """
@@ -888,9 +862,7 @@ class AsyncIRCClient:
 
         # Display the kick message in the chat window
         kick_message_content = f"{kicked_nickname} has been kicked from {channel} by {tokens.hostmask.nickname} ({reason})"
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, kick_message_content + "\r\n")
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(kick_message_content + "\r\n")
 
         # Remove the user from the channel_users list for the channel
         user_found = False
@@ -957,9 +929,7 @@ class AsyncIRCClient:
 
     async def handle_376(self, tokens):
         full_motd = "\n".join(self.motd_lines)
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f"Message of the Day:\n{full_motd}\r\n")
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f"Message of the Day:\n{full_motd}\r\n")
         self.gui.insert_and_scroll()
         self.motd_lines.clear()
 
@@ -980,26 +950,20 @@ class AsyncIRCClient:
 
     async def handle_error(self, tokens):
         error_message = ' '.join(tokens.params) if tokens.params else 'Unknown error'
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f"ERROR: {error_message}\r\n")
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f"ERROR: {error_message}\r\n")
         self.gui.insert_and_scroll()
 
     async def handle_cap_main(self, tokens):
         subcommand = tokens.params[1].upper()
         if subcommand == "LS":
             capabilities = tokens.params[-1]
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, f"Server capabilities: {capabilities}\r\n")
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(f"Server capabilities: {capabilities}\r\n")
             self.gui.insert_and_scroll()
             # Optional: If you want to enable specific capabilities
             # await self.send_message("CAP REQ :some-capability another-capability")
         elif subcommand == "ACK":  # If the server acknowledges the capabilities you requested
             acknowledged_caps = tokens.params[-1]
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, f"Enabled capabilities: {acknowledged_caps}\r\n")
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(f"Enabled capabilities: {acknowledged_caps}\r\n")
             self.gui.insert_and_scroll()
 
     async def handle_incoming_message(self):
@@ -1012,25 +976,18 @@ class AsyncIRCClient:
             try:
                 data = await asyncio.wait_for(self.reader.read(4096), timeout_seconds)
             except asyncio.TimeoutError:
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, "Read operation timed out!\n")
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget("Read operation timed out!\n")
                 continue
             except OSError as e:
                 if e.winerror == 121:  # Check if the WinError code is 121
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"WinError: {e}\n")
-                    self.text_widget.config(state=tk.DISABLED)
-                    continue
+                    await self.gui.insert_text_widget(f"WinError: {e}\n")
+                    await self.reconnect()
                 else:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"Unhandled OSError: {e}\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"Unhandled OSError: {e}\n")
                     continue
             except Exception as e:  # General exception catch
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, f"An unexpected error occurred: {e}\n")
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(f"An unexpected error occurred: {e}\n")
+
                 continue
 
             if not data:
@@ -1044,16 +1001,12 @@ class AsyncIRCClient:
                 try:
                     # Check for an empty line or line with only whitespace before attempting to tokenize
                     if len(line.strip()) == 0:
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"Received an empty or whitespace-only line: '{line}'\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(f"Received an empty or whitespace-only line: '{line}'\r\n")
                         continue
 
                     # Additional check: Ensure that the line has at least one character
                     if len(line) < 1:
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"Received a too-short line: '{line}'\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(f"Received a too-short line: '{line}'\r\n")
                         continue
 
                     # Debug statement to print the line before tokenizing
@@ -1061,14 +1014,10 @@ class AsyncIRCClient:
 
                     tokens = irctokens.tokenise(line)
                 except ValueError as e:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"Error: {e}\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"Error: {e}\r\n")
                     continue
                 except IndexError as ie:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"IndexError: {ie}. Line: '{line}'\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"IndexError: {ie}. Line: '{line}'\r\n")
                     continue
 
                 match tokens.command:
@@ -1211,9 +1160,7 @@ class AsyncIRCClient:
 
             case "query":  # open a DM with a user
                 if len(args) < 2:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a nickname for the query command.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}Error: Please provide a nickname for the query command.\r\n")
                     return
 
                 nickname = args[1]
@@ -1222,13 +1169,9 @@ class AsyncIRCClient:
                     self.joined_channels.append(nickname)
                     self.gui.channel_lists[self.server] = self.joined_channels
                     self.update_gui_channel_list()
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}Opened DM with {nickname}.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}Opened DM with {nickname}.\r\n")
                 else:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}You already have a DM open with {nickname}.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}You already have a DM open with {nickname}.\r\n")
 
             case "cq":  # close a private message (query) with a user
                 if len(args) < 2:
@@ -1250,45 +1193,31 @@ class AsyncIRCClient:
                         self.update_gui_channel_list()
 
                         # Display a message indicating the DM was closed
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"Private message with {nickname} closed.\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(f"Private message with {nickname} closed.\r\n")
                     else:
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.insert(tk.END, f"No open private message with {nickname}.\r\n")
-                        self.text_widget.config(state=tk.DISABLED)
+                        await self.gui.insert_text_widget(f"No open private message with {nickname}.\r\n")
 
             case "quote":  # sends raw IRC message to the server
                 if len(args) < 2:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a raw IRC command after /quote.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}Error: Please provide a raw IRC command after /quote.\r\n")
                     return
 
                 raw_command = " ".join(args[1:])
                 await self.send_message(raw_command)
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, f"{timestamp}Sent raw command: {raw_command}\r\n")
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(f"{timestamp}Sent raw command: {raw_command}\r\n")
 
             case "away":  # set the user as away
                 away_message = " ".join(args[1:]) if len(args) > 1 else None
                 if away_message:
                     await self.send_message(f"AWAY :{away_message}")
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}You are now set as away: {away_message}\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}You are now set as away: {away_message}\r\n")
                 else:
                     await self.send_message("AWAY")
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}You are now set as away.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}You are now set as away.\r\n")
 
             case "back":  # remove the "away" status
                 await self.send_message("AWAY")
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, f"{timestamp}You are now back and no longer set as away.\r\n")
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(f"{timestamp}You are now back and no longer set as away.\r\n")
 
             case "msg":  # send a private message to a user
                 if len(args) < 3:
@@ -1298,15 +1227,11 @@ class AsyncIRCClient:
                     nickname = args[1]
                     message = " ".join(args[2:])
                     await self.send_message(f"PRIVMSG {nickname} :{message}")
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f'<{self.nickname} -> {nickname}> {message}\r\n')
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f'<{self.nickname} -> {nickname}> {message}\r\n')
 
             case "CTCP":
                 if len(args) < 3:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a nickname and CTCP command.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}Error: Please provide a nickname and CTCP command.\r\n")
                     return
                 target_nick = args[1]
                 ctcp_command = args[2]
@@ -1314,17 +1239,13 @@ class AsyncIRCClient:
 
             case "mode":
                 if len(args) < 2:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a mode.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}Error: Please provide a mode.\r\n")
                     return
                 mode = args[1]
                 # Check if a channel is provided, if not use the current channel
                 channel = args[2] if len(args) > 2 else self.current_channel
                 if not channel:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}Error: No channel selected or provided.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}Error: No channel selected or provided.\r\n")
                     return
                 await self.set_mode(channel, mode)
 
@@ -1346,9 +1267,7 @@ class AsyncIRCClient:
                 if self.current_channel:
                     await self.handle_action(args)
                 else:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, "No channel selected. Use /join to join a channel.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"No channel selected. Use /join to join a channel.\r\n")
 
             case "list":
                 await self.send_message("LIST")
@@ -1357,23 +1276,17 @@ class AsyncIRCClient:
 
             case "ch":
                 for channel in self.joined_channels:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f'{channel}\r\n')
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f'{channel}\r\n')
 
             case "sw":
                 channel_name = args[1]
                 if channel_name in self.joined_channels:
                     self.current_channel = channel_name
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"Switched to channel {self.current_channel}\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
-                    self.display_last_messages(self.current_channel)
+                    await self.gui.insert_text_widget(f"Switched to channel {self.current_channel}\r\n")
+                    await self.display_last_messages(self.current_channel)
                     self.gui.highlight_nickname()
                 else:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"Not a member of channel {channel_name}\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"Not a member of channel {channel_name}\r\n")
 
             case "topic":
                 await self.request_topic_for_current_channel()
@@ -1388,9 +1301,7 @@ class AsyncIRCClient:
 
             case "nick":
                 if len(args) < 2:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a new nickname.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}Error: Please provide a new nickname.\r\n")
                     return
                 new_nick = args[1]
                 await self.change_nickname(new_nick)
@@ -1400,9 +1311,7 @@ class AsyncIRCClient:
 
             case "sa":
                 if len(args) < 2:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}Error: Please provide a message to send to all channels.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}Error: Please provide a message to send to all channels.\r\n")
                     return
                 message = " ".join(args[1:])
                 await self.send_message_to_all_channels(message)
@@ -1414,7 +1323,7 @@ class AsyncIRCClient:
                 return False
 
             case "help":
-                self.display_help()
+                await self.display_help()
 
             case "fortune":
                 file_name_arg = args[1] if len(args) > 1 else None
@@ -1425,9 +1334,7 @@ class AsyncIRCClient:
             case None:
                 if self.current_channel:
                     await self.send_message(f'PRIVMSG {self.current_channel} :{user_input}')
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, f"{timestamp}<{self.nickname}> {user_input}\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"{timestamp}<{self.nickname}> {user_input}\r\n")
                     self.gui.highlight_nickname()
                     self.gui.insert_and_scroll()
                     
@@ -1444,14 +1351,10 @@ class AsyncIRCClient:
                     self.log_message(self.current_channel, self.nickname, user_input, is_sent=True)
 
                 else:
-                    self.text_widget.config(state=tk.NORMAL)
-                    self.text_widget.insert(tk.END, "No channel selected. Use /join to join a channel.\r\n")
-                    self.text_widget.config(state=tk.DISABLED)
+                    await self.gui.insert_text_widget(f"No channel selected. Use /join to join a channel.\r\n")
 
             case _:
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, "Invalid command. Type /help for a list of commands.\r\n")
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget("Invalid command. Type /help for a list of commands.\r\n")
 
         return True
 
@@ -1468,9 +1371,7 @@ class AsyncIRCClient:
         ban_info = f"Channel: {channel}, Banmask: {banmask}, Set by: {setter}, Timestamp: {timestamp}\r\n"
         
         # Update the GUI's message text with this ban information
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, ban_info)
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(ban_info)
 
     async def handle_endofbanlist(self, tokens):
         """
@@ -1480,9 +1381,7 @@ class AsyncIRCClient:
         
         # Notify the user that the ban list has ended
         end_message = f"End of ban list for channel: {channel}\r\n"
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, end_message) 
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(end_message) 
 
     async def append_to_channel_history(self, channel, message, is_action=False):
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
@@ -1590,9 +1489,7 @@ class AsyncIRCClient:
         for line in cowsay_fortune.split('\n'):
             formatted_message = f"{timestamp}<{self.nickname}> {line}\r\n"
             await self.send_message(f'PRIVMSG {self.current_channel} :{line}')
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, formatted_message)
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(formatted_message)
             self.gui.highlight_nickname()
             await asyncio.sleep(0.4)
             await self.append_to_channel_history(self.current_channel, line)
@@ -1606,9 +1503,7 @@ class AsyncIRCClient:
         for line in cowsay_output.split('\n'):
             formatted_message = f"{timestamp}<{self.nickname}> {line}\r\n"
             await self.send_message(f'PRIVMSG {self.current_channel} :{line}')
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, formatted_message)
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(formatted_message)
             self.gui.highlight_nickname()
             await asyncio.sleep(0.4)
             await self.append_to_channel_history(self.current_channel, line)
@@ -1625,9 +1520,7 @@ class AsyncIRCClient:
         for line in chosen_fortune.split('\n'):
             formatted_message = f"{timestamp}<{self.nickname}> {line}\r\n"
             await self.send_message(f'PRIVMSG {self.current_channel} :{line}')
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, formatted_message)
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(formatted_message)
             self.gui.highlight_nickname()
             await asyncio.sleep(0.4)
             await self.append_to_channel_history(self.current_channel, line)
@@ -1645,17 +1538,13 @@ class AsyncIRCClient:
         if self.current_channel:
             await self.send_message(f'TOPIC {self.current_channel}')
         else:
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, "No channel selected. Use /join to join a channel.\r\n")
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget("No channel selected. Use /join to join a channel.\r\n")
 
     async def refresh_user_list_for_current_channel(self):
         if self.current_channel:
             await self.send_message(f'NAMES {self.current_channel}')
         else:
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, "No channel selected. Use /join to join a channel.\r\n")
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget("No channel selected. Use /join to join a channel.\r\n")
 
     async def change_nickname(self, new_nick):
         await self.send_message(f'NICK {new_nick}')
@@ -1680,9 +1569,7 @@ class AsyncIRCClient:
             # Trim the messages list if it exceeds 200 lines
             if len(self.channel_messages[channel]) > 200:
                 self.channel_messages[channel] = self.channel_messages[channel][-200:]
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f"Message: {message} sent to all channels")
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f"Message: {message} sent to all channels")
 
     async def handle_who_command(self, args):
         """
@@ -1711,9 +1598,7 @@ class AsyncIRCClient:
         formatted_message = f"* {self.nickname} {action_message}"
         await self.send_message(f'PRIVMSG {self.current_channel} :\x01ACTION {action_message}\x01')
         timestamp = datetime.datetime.now().strftime('[%H:%M:%S] ')
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, f"{timestamp}{formatted_message}\r\n")
-        self.text_widget.config(state=tk.DISABLED)
+        await self.gui.insert_text_widget(f"{timestamp}{formatted_message}\r\n")
         self.gui.highlight_nickname()
         self.gui.insert_and_scroll()
 
@@ -1726,7 +1611,7 @@ class AsyncIRCClient:
         if len(self.channel_messages[self.current_channel]) > 200:
             self.channel_messages[self.current_channel] = self.channel_messages[self.current_channel][-200:]
 
-    def display_help(self):
+    async def display_help(self):
         # Categories and their associated commands
         categories = {
             "Channel Management": [
@@ -1767,14 +1652,10 @@ class AsyncIRCClient:
 
         # Display the categorized commands
         for category, commands in categories.items():
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, f"\n{category}:\n")
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(f"\n{category}:\n")
             self.gui.insert_and_scroll()
             for cmd in commands:
-                self.text_widget.config(state=tk.NORMAL)
-                self.text_widget.insert(tk.END, f"{cmd}\r\n")
-                self.text_widget.config(state=tk.DISABLED)
+                await self.gui.insert_text_widget(f"{cmd}\r\n")
                 self.gui.insert_and_scroll()
 
     def set_gui(self, gui):
@@ -1802,12 +1683,10 @@ class AsyncIRCClient:
 
         await self.main_loop()
 
-    def display_last_messages(self, channel, num=200):
+    async def display_last_messages(self, channel, num=200):
         messages = self.channel_messages.get(channel, [])
         for message in messages[-num:]:
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, message)
-            self.text_widget.config(state=tk.DISABLED)
+            await self.gui.insert_text_widget(message)
 
 
 class IRCGui:
@@ -1891,6 +1770,11 @@ class IRCGui:
         # Initialize the AsyncIRCClient and set the GUI reference
         self.irc_client = AsyncIRCClient(self.text_widget, self.server_text_widget, self.entry_widget, self.master, self)
 
+    async def insert_text_widget(self, message):
+        self.text_widget.config(state=tk.NORMAL)
+        self.text_widget.insert(tk.END, message)
+        self.text_widget.config(state=tk.DISABLED)
+
     async def send_quit_to_all_clients(self):
         for irc_client in self.clients.values():
             await irc_client.send_message('QUIT')
@@ -1959,20 +1843,16 @@ class IRCGui:
         if channel_name in self.irc_client.joined_channels:
             self.irc_client.current_channel = channel_name
             self.update_nick_channel_label()
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, f"Switched to channel {self.irc_client.current_channel}\r\n")
-            self.text_widget.config(state=tk.DISABLED)
+            await self.insert_text_widget(f"Switched to channel {self.irc_client.current_channel}\r\n")
             
             # Display the last messages for the current channel
-            self.irc_client.display_last_messages(self.irc_client.current_channel)
+            await self.irc_client.display_last_messages(self.irc_client.current_channel)
             self.highlight_nickname()
             
             self.irc_client.update_gui_user_list(channel_name)
             self.insert_and_scroll()
         else:
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, f"Not a member of channel {channel_name}\r\n")
-            self.text_widget.config(state=tk.DISABLED)
+            await self.insert_text_widget(f"Not a member of channel {channel_name}\r\n")
 
     def insert_and_scroll(self):
         self.text_widget.see(tk.END)
