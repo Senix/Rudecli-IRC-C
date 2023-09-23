@@ -475,76 +475,69 @@ class AsyncIRCClient:
         target = tokens.params[0]
         message = tokens.params[1]
 
-        # Use the user_to_ignore function to check if the message should be ignored
+        # Check if the message should be ignored
         if self.user_to_ignore(sender, str(hostmask)):
             return
 
-        # Check if the user is mentioned in the message
+        # Handle mentions
         if self.nickname in message:
             await self.notify_user_of_mention(self.server, target)
 
-        # Check for CTCP command
+        # Handle CTCP
         if message.startswith('\x01') and message.endswith('\x01'):
             await self.handle_ctcp(tokens)
             return
 
-        # If the target is the bot's nickname, it's a DM
-        if target == self.nickname:
-            target = sender  # Consider the sender as the "channel" for DMs
+        # Determine if it's a DM
+        is_direct_message = (target == self.nickname)
+        actual_target = sender if is_direct_message else target
 
-            # Check if we have executed WHOIS for this sender before
-            if sender not in self.whois_executed:
-                await self.send_message(f'WHOIS {sender}')
-                self.whois_executed.add(sender)
-
-            # Check if the server exists in the dictionary
-            if self.server not in self.channel_messages:
-                self.channel_messages[self.server] = {}
-
-            # Check if the DM exists in the server's dictionary
-            if target not in self.channel_messages[self.server]:
-                self.channel_messages[self.server][target] = []
+        # Initialize the history if needed
+        if is_direct_message and self.server not in self.channel_messages:
+            self.channel_messages[self.server] = {}
+            
+        if is_direct_message:
+            if actual_target not in self.channel_messages[self.server]:
+                self.channel_messages[self.server][actual_target] = []
 
                 # If it's a DM and not in the joined_channels list, add it
-                if target == sender and target not in self.joined_channels:
-                    self.joined_channels.append(target)
+                if actual_target not in self.joined_channels:
+                    self.joined_channels.append(actual_target)
                     self.gui.channel_lists[self.server] = self.joined_channels
                     self.update_gui_channel_list()
 
-            # Now it's safe to append the message
-            self.channel_messages[self.server][target].append(f"{timestamp}<{sender}> {message}\r\n")
-            self.log_message(target, sender, message, is_sent=False)
-
-            # Identify the correct message list for trimming
-            message_list = self.channel_messages[self.server][target]
         else:
-            # It's a channel message
-            if target not in self.channel_messages:
-                self.channel_messages[target] = []
-            
-            self.channel_messages[target].append(f"{timestamp}<{sender}> {message}\r\n")
-            self.log_message(target, sender, message, is_sent=False)
+            if actual_target not in self.channel_messages:
+                self.channel_messages[actual_target] = []
 
-            # Identify the correct message list for trimming
-            message_list = self.channel_messages[target]
+        # Append the message to history
+        message_history = self.channel_messages[self.server][actual_target] if is_direct_message else self.channel_messages[actual_target]
+        message_history.append(f"{timestamp}<{sender}> {message}\r\n")
 
-        # Trim the messages list if it exceeds 200 lines
-        if len(message_list) > 200:
-            message_list = message_list[-200:]
+        # Trim the message history if needed
+        if len(message_history) > 200:
+            message_history = message_history[-200:]
 
-        # Display the message in the text_widget if the target matches the current channel or DM
-        if target == self.current_channel and self.gui.irc_client == self:
+        # Log the message
+        self.log_message(actual_target, sender, message, is_sent=False)
+
+        # Update GUI
+        if actual_target == self.current_channel and self.gui.irc_client == self:
             self.gui.insert_text_widget(f"{timestamp}<{sender}> {message}\r\n")
             self.gui.highlight_nickname()
             self.gui.insert_and_scroll()
         else:
-            # If it's not the currently viewed channel, highlight the channel in green in the Listbox
             for idx in range(self.gui.channel_listbox.size()):
-                if self.gui.channel_listbox.get(idx) == target:
+                if self.gui.channel_listbox.get(idx) == actual_target:
                     current_bg = self.gui.channel_listbox.itemcget(idx, 'bg')
                     if current_bg != 'red':
                         self.gui.channel_listbox.itemconfig(idx, {'bg':'green'})
                     break
+
+        # Handle WHOIS for DMs
+        if is_direct_message and sender not in self.whois_executed:
+            await self.send_message(f'WHOIS {sender}')
+            self.whois_executed.add(sender)
 
     def handle_join(self, tokens):
         user_info = tokens.hostmask.nickname
