@@ -175,65 +175,72 @@ class AsyncIRCClient:
         self.gui.insert_text_widget("Failed to reconnect after multiple attempts. Please check your connection.\r\n")
 
     async def _await_welcome_message(self):
-        self.gui.insert_text_widget(f'Waiting for welcome message from server.\r\n')
-        buffer_list = []
-        received_001 = False  
-        
         try:
-            while True:
-                data = await self.reader.read(4096)
-                if not data:
-                    raise ConnectionError("Connection lost while waiting for welcome message.")
-                
-                decoded_data = data.decode('UTF-8', errors='ignore')
-                buffer_list.append(decoded_data)
-                buffer = "".join(buffer_list)
+            self.gui.insert_text_widget(f'Waiting for welcome message from server.\r\n')
+            buffer_list = []
+            received_001 = False  
 
-                while '\r\n' in buffer:
-                    line, buffer = buffer.split('\r\n', 1)
-                    tokens = irctokens.tokenise(line)
+            while True:  # Main loop
+                try:
+                    data = await self.reader.read(4096)
+                    if not data:
+                        raise ConnectionError("Connection lost while waiting for welcome message.")
 
-                    match tokens.command:
-                        case "CAP":
-                            await self.handle_cap(tokens)
-                        case "AUTHENTICATE":
-                            await self.handle_sasl_auth(tokens)
-                        case "903":
-                            await self.handle_sasl_successful()
-                            sasl_authenticated = True
-                        case "904":
-                            self.handle_sasl_failed()
-                        case "001":
-                            self.gui.insert_text_widget(f'Connected to server: {self.server}:{self.port}\r\n')
-                            received_001 = True  # Set this to True upon receiving 001
-                            self.gui.insert_and_scroll()
-                        case "005":  # Handling the ISUPPORT message
-                            self.handle_isupport(tokens)
-                            self.gui.insert_and_scroll()
-                        case "250":
-                            self.handle_connection_info(tokens)
-                        case "266":
-                            self.handle_global_users_info(tokens)
-                        case "433":  # Nickname already in use
-                            await self.handle_nickname_conflict(tokens)
-                        case "372":  # Individual line of MOTD
-                            self.handle_motd_line(tokens)
-                        case "375":  # Start of MOTD
-                            self.handle_motd_start(tokens)
-                        case "376":  # End of MOTD
-                            self.handle_motd_end(tokens)
-                        case "PING":
-                            await self.initial_ping(tokens)
-                        case _:
-                            self.gui.insert_and_scroll()
-                
-                if received_001:
-                    await self.automatic_join()
-                    return
+                    decoded_data = data.decode('UTF-8', errors='ignore')
+                    buffer_list.append(decoded_data)
+                    buffer = "".join(buffer_list)
 
-        except ConnectionError as e:
-            self.gui.insert_text_widget(f"Error occurred: {e}. Disconnecting.\r\n")
-            continue
+                    while '\r\n' in buffer:
+                        line, buffer = buffer.split('\r\n', 1)
+                        tokens = irctokens.tokenise(line)
+
+                        match tokens.command:
+                            case "CAP":
+                                await self.handle_cap(tokens)
+                            case "AUTHENTICATE":
+                                await self.handle_sasl_auth(tokens)
+                            case "903":
+                                await self.handle_sasl_successful()
+                                sasl_authenticated = True
+                            case "904":
+                                self.handle_sasl_failed()
+                            case "001":
+                                self.gui.insert_text_widget(f'Connected to server: {self.server}:{self.port}\r\n')
+                                received_001 = True  # Set this to True upon receiving 001
+                                self.gui.insert_and_scroll()
+                            case "005":  # Handling the ISUPPORT message
+                                self.handle_isupport(tokens)
+                                self.gui.insert_and_scroll()
+                            case "250":
+                                self.handle_connection_info(tokens)
+                            case "266":
+                                self.handle_global_users_info(tokens)
+                            case "433":  # Nickname already in use
+                                await self.handle_nickname_conflict(tokens)
+                            case "372":  # Individual line of MOTD
+                                self.handle_motd_line(tokens)
+                            case "375":  # Start of MOTD
+                                self.handle_motd_start(tokens)
+                            case "376":  # End of MOTD
+                                self.handle_motd_end(tokens)
+                            case "PING":
+                                await self.initial_ping(tokens)
+                            case _:
+                                self.gui.insert_and_scroll()
+
+                    if received_001:
+                        await self.automatic_join()
+                        return
+
+                except ConnectionError as e:
+                    self.gui.insert_text_widget(f"Error occurred: {e}. Trying to reconnect...\r\n")
+                    # Maybe initiate a reconnection process here instead of continue
+                    continue  # This continue is now inside the while loop
+
+                except Exception as e:
+                    self.gui.insert_text_widget(f"An unexpected error occurred: {e}. Disconnecting.\r\n")
+                    # Handle disconnection
+                    break  # Exiting the while loop
 
         except Exception as e:
             self.gui.insert_text_widget(f"An unexpected error occurred: {e}. Disconnecting.\r\n")
@@ -723,6 +730,10 @@ class AsyncIRCClient:
         mode_change = tokens.params[1]
         user = tokens.params[2] if len(tokens.params) > 2 else None
 
+        # Skip over +q mode
+        if mode_change == '+q':
+            return
+
         if channel in self.joined_channels and user:
             current_modes = self.user_modes.get(channel, {})
 
@@ -737,10 +748,14 @@ class AsyncIRCClient:
                 user_modes = current_modes.get(user, set())
                 user_modes.discard(mode)
                 
-                # Remove the mode symbols from the channel_users list
-                symbol_to_remove = self.mode_to_symbol[mode]
-                self.channel_users[channel] = [u.replace(symbol_to_remove, '') if u.endswith(user) else u for u in self.channel_users.get(channel, [])]
-                
+                try:
+                    # Remove the mode symbols from the channel_users list
+                    symbol_to_remove = self.mode_to_symbol[mode]
+                    self.channel_users[channel] = [u.replace(symbol_to_remove, '') if u.endswith(user) else u for u in self.channel_users.get(channel, [])]
+                except KeyError:
+                    # Ignore modes not in the mode_to_symbol dictionary
+                    pass
+                    
                 if not user_modes:
                     del current_modes[user]  # Remove the user's entry if no modes left
                 else:
