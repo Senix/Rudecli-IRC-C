@@ -26,7 +26,7 @@ class AsyncIRCClient:
         self.server_text_widget = server_text_widget
         self.joined_channels = []
         self.motd_lines = []
-        self.chantypes = []
+        self.chantypes = ''
         self.ignore_list = []
         self.current_channel = ''
         self.nickname = ''
@@ -176,7 +176,7 @@ class AsyncIRCClient:
     async def automatic_join(self):
         for channel in self.auto_join_channels:
             await self.join_channel(channel)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)
 
     async def _await_welcome_message(self):
         self.gui.insert_text_widget(f'Waiting for welcome message from server.\r\n')
@@ -719,6 +719,11 @@ class AsyncIRCClient:
         mode_change = tokens.params[1]
         user = tokens.params[2] if len(tokens.params) > 2 else None
 
+        # Ignore ban and unban commands
+        if mode_change in ['+b', '-b']:
+            print(f"Ignoring ban/unban mode for {user if user else 'unknown'}")
+            return
+
         if channel in self.joined_channels and user:
             current_modes = self.user_modes.get(channel, {})
 
@@ -780,7 +785,7 @@ class AsyncIRCClient:
                 self.mode_to_symbol = dict(zip(modes, symbols))
             elif param.startswith("CHANTYPES="):
                 _, channel_types = param.split("=")
-                self.chantypes = list(channel_types)
+                self.chantypes = channel_types
 
     async def handle_who_reply(self, tokens):
         """
@@ -900,7 +905,7 @@ class AsyncIRCClient:
             ignore_suggestion = f"*!{self.whois_data[nickname]['Username']}@{self.whois_data[nickname]['Hostname']}"
             file.write(f"\nSuggested /ignore mask: {ignore_suggestion}\n")
 
-    async def handle_time_request(self, tokens):
+    def handle_time_request(self, tokens):
         """
         Handle the server's response for the TIME command.
         """
@@ -995,7 +1000,7 @@ class AsyncIRCClient:
         self.gui.insert_server_widget(f"Successfully authenticated as: {logged_in_as}\r\n")
         self.gui.insert_and_scroll()
 
-    async def handle_396(self, tokens):
+    def handle_396(self, tokens):
         hidden_host = tokens.params[1]
         reason = tokens.params[2]
         self.gui.insert_server_widget(f"Your host is now hidden as: {hidden_host}. Reason: {reason}\r\n")
@@ -1019,7 +1024,7 @@ class AsyncIRCClient:
             self.gui.insert_text_widget(f"Enabled capabilities: {acknowledged_caps}\r\n")
             self.gui.insert_and_scroll()
 
-    async def handle_topic(self, tokens):
+    def handle_topic(self, tokens):
         channel_name = tokens.params[1] 
         command = tokens.command
 
@@ -1101,10 +1106,10 @@ class AsyncIRCClient:
                     case "900":
                         self.handle_900(tokens)
                     case "396":
-                        await self.handle_396(tokens)
+                        self.handle_396(tokens)
 
                     case "391":
-                        await self.handle_time_request(tokens)
+                        self.handle_time_request(tokens)
 
                     case "352" | "315":
                         await self.handle_who_reply(tokens)
@@ -1113,13 +1118,13 @@ class AsyncIRCClient:
                         await self.handle_whois_replies(tokens.command, tokens)
 
                     case "332" | "333":
-                        await self.handle_topic(tokens)
+                        self.handle_topic(tokens)
 
                     case "367":  
-                        await self.handle_banlist(tokens)
+                        self.handle_banlist(tokens)
                             
                     case "368":  
-                        await self.handle_endofbanlist(tokens)
+                        self.handle_endofbanlist(tokens)
 
                     case "322":  # Channel list
                         await self.handle_list_response(tokens)
@@ -1302,14 +1307,33 @@ class AsyncIRCClient:
             case "mode":
                 if len(args) < 2:
                     self.gui.insert_text_widget(f"{timestamp}Error: Please provide a mode.\r\n")
+                    self.gui.insert_text_widget("Usage: /mode [+|-][mode flags] [target] [channel]\r\n")
+                    self.gui.insert_text_widget("Example for channel: /mode +o #channel_name\r\n")
+                    self.gui.insert_text_widget("Example for user: /mode +o username #channel_name\r\n")
+                    self.gui.insert_text_widget("If no channel is specified, the mode will be set for the current channel.\r\n")
                     return
+
                 mode = args[1]
-                # Check if a channel is provided, if not use the current channel
-                channel = args[2] if len(args) > 2 else self.current_channel
+                target = None  # Initialize target to None
+                channel = self.current_channel  # Default to current channel
+
+                if len(args) > 2:
+                    possible_target = args[2]
+                    # Check if the third argument is a channel or a user
+                    if possible_target.startswith(tuple(self.chantypes)):
+                        channel = possible_target
+                    else:
+                        target = possible_target
+
+                if len(args) > 3:
+                    # If we have a fourth argument, it should be the channel
+                    channel = args[3]
+
                 if not channel:
                     self.gui.insert_text_widget(f"{timestamp}Error: No channel selected or provided.\r\n")
                     return
-                await self.set_mode(channel, mode)
+
+                await self.set_mode(channel, mode, target)
 
             case "who":
                 await self.handle_who_command(args[1:])
@@ -1350,7 +1374,10 @@ class AsyncIRCClient:
                     self.gui.insert_text_widget(f"Not a member of channel {channel_name}\r\n")
 
             case "topic":
-                await self.request_topic_for_current_channel()
+                # Use this line to join all the arguments after the first one (the command "topic")
+                # This allows for multi-word topics
+                new_topic = ' '.join(args[1:])
+                await self.request_send_topic(new_topic)
 
             case "names":
                 await self.refresh_user_list_for_current_channel()
@@ -1383,7 +1410,7 @@ class AsyncIRCClient:
                 return False
 
             case "help":
-                await self.display_help()
+                self.display_help()
 
             case "fortune":
                 file_name_arg = args[1] if len(args) > 1 else None
@@ -1405,7 +1432,7 @@ class AsyncIRCClient:
                     self.gui.insert_and_scroll()
 
                     # Check if it's a DM or channel
-                    if self.current_channel.startswith("#"):  # It's a channel
+                    if self.current_channel.startswith(self.chantypes):  # It's a channel
                         if self.current_channel not in self.channel_messages:
                             self.channel_messages[self.current_channel] = []
                         self.channel_messages[self.current_channel].append(f"{timestamp}<{self.nickname}> {user_input}\r\n")
@@ -1476,7 +1503,7 @@ class AsyncIRCClient:
         self.load_ignore_list()
         self.gui.insert_text_widget(f"Ignore List reloaded.\r\n")
 
-    async def handle_banlist(self, tokens):
+    def handle_banlist(self, tokens):
         """
         Handle the RPL_BANLIST reply, which provides info about each ban mask.
         """
@@ -1491,7 +1518,7 @@ class AsyncIRCClient:
         # Update the GUI's message text with this ban information
         self.gui.insert_text_widget(ban_info)
 
-    async def handle_endofbanlist(self, tokens):
+    def handle_endofbanlist(self, tokens):
         """
         Handle the RPL_ENDOFBANLIST reply, signaling the end of the ban list.
         """
@@ -1608,6 +1635,7 @@ class AsyncIRCClient:
             formatted_message = f"{timestamp}<{self.nickname}> {line}\r\n"
             await self.send_message(f'PRIVMSG {self.current_channel} :{line}')
             self.gui.insert_text_widget(formatted_message)
+            self.gui.insert_and_scroll()
             self.gui.highlight_nickname()
             await asyncio.sleep(0.4)
             await self.append_to_channel_history(self.current_channel, line)
@@ -1639,6 +1667,7 @@ class AsyncIRCClient:
             formatted_message = f"{timestamp}<{self.nickname}> {line}\r\n"
             await self.send_message(f'PRIVMSG {self.current_channel} :{line}')
             self.gui.insert_text_widget(formatted_message)
+            self.gui.insert_and_scroll()
             self.gui.highlight_nickname()
             await asyncio.sleep(0.4)
             await self.append_to_channel_history(self.current_channel, line)
@@ -1648,13 +1677,23 @@ class AsyncIRCClient:
         ctcp_message = f"\x01{ctcp_command.upper()}\x01"
         await self.send_message(f'PRIVMSG {target_nick} :{ctcp_message}')
 
-    async def set_mode(self, channel, mode):
-        """Sets the mode for the current user in a specified channel."""
-        await self.send_message(f'MODE {channel} {mode}')
+    async def set_mode(self, channel, mode, target=None):
+        """Sets the mode for a specified target in a specified channel.
+        If target is None, sets the mode for the channel.
+        """
+        if target:
+            await self.send_message(f'MODE {channel} {mode} {target}')
+        else:
+            await self.send_message(f'MODE {channel} {mode}')
 
-    async def request_topic_for_current_channel(self):
+    async def request_send_topic(self, new_topic=None):
         if self.current_channel:
-            await self.send_message(f'TOPIC {self.current_channel}')
+            if new_topic:
+                # Set the new topic
+                await self.send_message(f'TOPIC {self.current_channel} :{new_topic}')
+            else:
+                # Request the current topic
+                await self.send_message(f'TOPIC {self.current_channel}')
         else:
             self.gui.insert_text_widget("No channel selected. Use /join to join a channel.\r\n")
 
@@ -1730,7 +1769,7 @@ class AsyncIRCClient:
         if len(self.channel_messages[self.current_channel]) > 200:
             self.channel_messages[self.current_channel] = self.channel_messages[self.current_channel][-200:]
 
-    async def display_help(self):
+    def display_help(self):
         # Categories and their associated commands
         categories = {
             "Channel Management": [
@@ -2055,6 +2094,7 @@ class IRCGui:
             # Display the last messages for the current DM
             print(f"Debug: server = {server}")
             self.irc_client.display_last_messages(channel_name, server_name=server)
+            self.insert_and_scroll()
             print(f"server: {server}")
             self.highlight_nickname()
 
